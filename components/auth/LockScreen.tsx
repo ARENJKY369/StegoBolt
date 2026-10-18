@@ -15,6 +15,7 @@ import { useRouter } from 'next/navigation';
 import { importVaultFile } from '@/lib/vault';
 import { useVault } from '@/lib/session';
 import { InfoTip, TIPS } from '@/components/ui/Tooltip';
+import { LogoMark as BrandMark } from '@/components/ui/Logo';
 
 function LogoMark({ size = 56 }: { size?: number }) {
   return (
@@ -23,14 +24,11 @@ function LogoMark({ size = 56 }: { size?: number }) {
       style={{
         width: size,
         height: size,
-        background: 'radial-gradient(circle at 35% 30%, rgba(34,197,94,0.28), rgba(10,14,19,0.9) 62%)',
-        boxShadow: '0 0 34px rgba(34,197,94,0.28), inset 0 0 0 1px rgba(34,197,94,0.35)',
+        background: 'radial-gradient(circle at 35% 30%, rgba(34,197,94,0.22), rgba(10,14,19,0.95) 68%)',
+        boxShadow: '0 0 34px rgba(34,197,94,0.25), inset 0 0 0 1px rgba(34,197,94,0.35)',
       }}
     >
-      <svg width={size * 0.5} height={size * 0.5} viewBox="0 0 24 24" fill="none">
-        <circle cx="12" cy="12" r="10" stroke="#22c55e" strokeWidth="1.6" strokeDasharray="3.2 2.4" opacity="0.85" />
-        <path d="M13 5.5 7.5 13.4h3.4L11 18.5l5.5-7.9h-3.4l0.9-5.1Z" fill="#22c55e" stroke="#a7f3d0" strokeWidth="0.6" strokeLinejoin="round" />
-      </svg>
+      <BrandMark size={Math.round(size * 0.58)} />
     </div>
   );
 }

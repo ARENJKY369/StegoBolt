@@ -2,6 +2,7 @@
 
 import { BookOpen, Info, Layers, Lock, LockKeyholeOpen, Shield, X } from 'lucide-react';
 import { useVault } from '@/lib/session';
+import { Logo } from '@/components/ui/Logo';
 import { Tooltip } from '@/components/ui/Tooltip';
 
 export type ModalId = 'about' | 'manual' | 'privacy' | null;
@@ -18,16 +19,7 @@ export function Navbar({ onOpen }: { onOpen: (m: ModalId) => void }) {
   return (
     <header className="sticky top-0 z-40 flex h-14 items-center justify-between border-b border-hair bg-[#0c1117]/95 px-4 backdrop-blur">
       <div className="flex items-center gap-2.5">
-        <span
-          className="flex h-7 w-7 items-center justify-center rounded-lg"
-          style={{ background: 'radial-gradient(circle at 35% 30%, rgba(34,197,94,0.35), rgba(10,14,19,0.95) 70%)', boxShadow: 'inset 0 0 0 1px rgba(34,197,94,0.4)' }}
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-            <path d="M13 4.5 7.5 13h3.4L10.5 19.5 16.5 11h-3.4L13 4.5Z" fill="#22c55e" stroke="#bbf7d0" strokeWidth="0.8" strokeLinejoin="round" />
-          </svg>
-        </span>
-        <span className="text-[16.5px] font-bold tracking-tight text-slate-100">StegoBolt</span>
-        <span className="ml-3 hidden items-center gap-1 text-[10.5px] text-slate-600 lg:flex">v2.0 · local-only build</span>
+        <Logo size={26} />
       </div>
 
       <nav className="flex items-center gap-1">
