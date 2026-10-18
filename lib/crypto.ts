@@ -69,10 +69,13 @@ export async function deriveAesKey(
   passphrase: string,
   salt: Uint8Array,
   iterations: number = PBKDF2_ITERATIONS,
-  extractable: boolean = false
+  extractable: boolean = false,
+  algName: 'AES-GCM' | 'AES-CTR' = 'AES-GCM'
 ): Promise<CryptoKey> {
   // Payload keys are non-extractable by default; the vault session key opts in
   // to `extractable: true` only so it can be wrapped for biometric unlock.
+  // WebCrypto binds an AES key to ONE AES variant, so CTR callers must derive
+  // an AES-CTR-named key — a GCM key cannot perform CTR operations.
   const iter = Math.max(1, Math.floor(iterations));
   const base = await crypto.subtle.importKey('raw', textEnc.encode(passphrase), 'PBKDF2', false, [
     'deriveKey',
@@ -80,10 +83,14 @@ export async function deriveAesKey(
   return crypto.subtle.deriveKey(
     { name: 'PBKDF2', salt: salt as BufferSource, iterations: iter, hash: 'SHA-256' },
     base,
-    { name: 'AES-GCM', length: 256 },
+    { name: algName, length: 256 },
     extractable,
     ['encrypt', 'decrypt']
   );
+}
+
+function deriveAesKeyForCipher(passphrase: string, salt: Uint8Array, cipher: number): Promise<CryptoKey> {
+  return deriveAesKey(passphrase, salt, PBKDF2_ITERATIONS, false, cipher === CIPHER.AES_256_CTR ? 'AES-CTR' : 'AES-GCM');
 }
 
 /* ---------- low level AE ciphers ---------- */
@@ -149,7 +156,7 @@ export async function sealPayload(
   const salt = sessionSalt ?? randomBytes(16);
   const ivLen = ivLenFor(cipher);
   const iv = randomBytes(ivLen);
-  const key = await deriveAesKey(passphrase, salt);
+  const key = await deriveAesKeyForCipher(passphrase, salt, cipher);
   const body =
     cipher === CIPHER.AES_256_CTR
       ? await ctrEncrypt(key, iv, plain)
@@ -175,7 +182,7 @@ export async function openPayload(
   const salt = sealed.subarray(0, 16);
   const iv = sealed.subarray(16, 16 + ivLen);
   const body = sealed.subarray(16 + ivLen);
-  const key = await deriveAesKey(passphrase, salt);
+  const key = await deriveAesKeyForCipher(passphrase, salt, cipher);
   if (cipher === CIPHER.AES_256_CTR) return await ctrDecrypt(key, iv, body);
   return await gcmDecrypt(key, iv, body); // throws OperationError on tamper / wrong pass
 }

@@ -11,6 +11,26 @@
 
 export const ENGINE_BASE = 'http://localhost:8080/api/v1/stego';
 
+let engineBase: string = ENGINE_BASE;
+
+/**
+ * Point the client at a live engine. Accepts either the bare origin
+ * (`http://localhost:8080`) or the full API base; the `/api/v1/stego` suffix is
+ * appended when missing so operators can paste what the engine prints at boot.
+ */
+export function setEngineBase(url: string): void {
+  const trimmed = (url ?? '').trim().replace(/\/+$/, '');
+  if (!trimmed) {
+    engineBase = ENGINE_BASE;
+    return;
+  }
+  engineBase = /\/api\/v1\/stego$/.test(trimmed) ? trimmed : `${trimmed}/api/v1/stego`;
+}
+
+export function getEngineBase(): string {
+  return engineBase;
+}
+
 export type EngineMedium =
   | 'IMAGE'
   | 'AUDIO'
@@ -85,7 +105,7 @@ function form(fields: Record<string, string | Blob | undefined>): FormData {
 }
 
 async function post<T>(path: string, fd: FormData): Promise<T> {
-  const res = await fetch(`${ENGINE_BASE}${path}`, { method: 'POST', body: fd });
+  const res = await fetch(`${engineBase}${path}`, { method: 'POST', body: fd });
   if (!res.ok) {
     let detail = res.statusText;
     try {
@@ -117,7 +137,7 @@ export async function hide(input: {
     payload: input.payloadFile,
     payloadText: input.payloadText,
   });
-  const res = await fetch(`${ENGINE_BASE}/hide`, { method: 'POST', body: fd });
+  const res = await fetch(`${engineBase}/hide`, { method: 'POST', body: fd });
   if (!res.ok) throw new Error(`Engine /hide failed (${res.status})`);
   const report = JSON.parse(res.headers.get('X-StegoBolt-Report') ?? '{}') as HideResponse;
   return { report, stego: await res.blob() };
@@ -136,7 +156,7 @@ export function scan(cover: File): Promise<ScanReport> {
 /** POST /clean — strip metadata + re-randomize LSB noise floor, return sanitized media. */
 export async function clean(cover: File, randomizeLsb = true): Promise<{ report: CleanResponse; cleaned: Blob }> {
   const fd = form({ cover, randomizeLsb: String(randomizeLsb) });
-  const res = await fetch(`${ENGINE_BASE}/clean`, { method: 'POST', body: fd });
+  const res = await fetch(`${engineBase}/clean`, { method: 'POST', body: fd });
   if (!res.ok) throw new Error(`Engine /clean failed (${res.status})`);
   const report = JSON.parse(res.headers.get('X-StegoBolt-Report') ?? '{}') as CleanResponse;
   return { report, cleaned: await res.blob() };

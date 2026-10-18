@@ -173,6 +173,7 @@ public final class StegoService {
                 String b64 = Base64.getEncoder().encodeToString(plaintext);
                 work.report = new ExtractReport(
                         medium.label(), true, text, b64, plaintext.length, sha256(plaintext));
+                work.out = plaintext;
                 work.track(cover, container, plaintext);
                 handedOff = true;
                 return work;

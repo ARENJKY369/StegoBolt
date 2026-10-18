@@ -26,8 +26,9 @@ import {
   toB64,
   wipe,
 } from './crypto';
+import { setEngineBase } from './engineApi';
 import { lsGet, lsGetJson, lsRemove, lsSet, lsSetJson } from './store';
-import { assertBiometric, isUserVerifyingPlatform, registerBiometric, webauthnSupported } from './webauthn';
+import { assertBiometric, forgetPubKey, isUserVerifyingPlatform, registerBiometric, webauthnSupported } from './webauthn';
 import { clearDemoHistory, clearVault, seedDemoHistory } from './vault';
 import { getWorkerMode, primeWorker } from './worker';
 
@@ -54,6 +55,10 @@ export interface Settings {
   backupToDisk: boolean;
   backupDirLabel: string;
   defaultCipher: number;
+  /** 'local' keeps all processing in the browser; 'engine' delegates to the Java engine. */
+  engineMode: 'local' | 'engine';
+  /** Base URL of the Java engine (origin or full /api/v1/stego base). */
+  engineUrl: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -63,6 +68,8 @@ export const DEFAULT_SETTINGS: Settings = {
   backupToDisk: true,
   backupDirLabel: '',
   defaultCipher: 1,
+  engineMode: 'local',
+  engineUrl: 'http://localhost:8080',
 };
 
 export interface Artifacts {
@@ -167,6 +174,11 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   }, []);
 
   /* ---------------- boot ---------------- */
+  useEffect(() => {
+    // Keep the typed engine client pointed at the operator-configured endpoint.
+    setEngineBase(settings.engineUrl || DEFAULT_SETTINGS.engineUrl);
+  }, [settings.engineUrl]);
+
   useEffect(() => {
     const setup = lsGetJson<SetupBlob | null>(K_SETUP, null);
     setSetupExists(!!setup);
@@ -370,6 +382,8 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   }, [getDeviceKey, log]);
 
   const removeBiometric = useCallback(() => {
+    const bio = lsGetJson<BioBlob | null>(K_BIO, null);
+    if (bio?.credId) forgetPubKey(bio.credId);
     lsRemove(K_BIO);
     setBiometricReady(false);
     log('Biometric binding removed — passphrase is the only unlock path again', 'warn');

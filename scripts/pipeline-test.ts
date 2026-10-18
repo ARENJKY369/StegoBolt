@@ -117,6 +117,92 @@ async function main() {
   assert.ok(last && last.ok === false && last.error.startsWith('NOT_STEGO'), 'worker NOT_STEGO error path');
   console.log('worker error path ok');
 
+  // ---- 4b. randomized worker↔main-thread parity fuzz (mirror-drift guard) ----
+  // Deterministic PRNG so any drift failure is reproducible.
+  let seed = 0x9e3779b9;
+  const rnd = (n: number) => {
+    seed ^= seed << 13; seed >>>= 0;
+    seed ^= seed >>> 17;
+    seed ^= seed << 5; seed >>>= 0;
+    return seed % n;
+  };
+  const FUZZ_CASES = 12;
+  for (let c = 0; c < FUZZ_CASES; c++) {
+    const fw = 8 + rnd(40);
+    const fh = 8 + rnd(30);
+    const fpx = new Uint8Array(fw * fh * 4);
+    for (let i = 0; i < fpx.length; i++) fpx[i] = rnd(256);
+    fpx.forEach((_, i) => {
+      if ((i & 3) === 3) fpx[i] = 255;
+    });
+    const flags = [CIPHER.RAW, CIPHER.AES_256_GCM, CIPHER.AES_256_CTR][rnd(3)];
+    const capBytes = Math.floor((fw * fh * 3) / 8) - 64; // leave room for salt|iv|tag|header
+    const len = capBytes <= 0 ? 0 : rnd(Math.min(700, capBytes) + 1);
+    const fplain = new Uint8Array(len);
+    for (let i = 0; i < len; i++) fplain[i] = rnd(256);
+    const fpass = `fuzz-pass-${c}-${rnd(1e6)}`;
+    const fsealed = await sealPayload(fplain, flags, flags === CIPHER.RAW ? '' : fpass);
+
+    // main-thread embed
+    const mainCarrier = fpx.slice();
+    embedIntoPixels(mainCarrier, fsealed, flags);
+    // worker embed — same inputs
+    fakeSelf.onmessage!({
+      data: {
+        id: 100 + c,
+        type: 'embed',
+        input: { pixels: fpx.slice().buffer, payload: fsealed.slice().buffer, flags },
+      },
+    });
+    assert.ok(last?.ok, `fuzz ${c}: worker embed ok`);
+    const wPx = new Uint8Array(last.output.pixels);
+    assert.equal(wPx.length, mainCarrier.length, `fuzz ${c}: same length`);
+    for (let i = 0; i < wPx.length; i++) {
+      assert.equal(wPx[i], mainCarrier[i], `fuzz ${c}: byte ${i} drifted (flags=${flags})`);
+    }
+
+    // extract parity: worker output must equal main-thread output
+    const mainGot = extractFromPixels(mainCarrier.slice());
+    fakeSelf.onmessage!({ data: { id: 200 + c, type: 'extract', input: { pixels: mainCarrier.slice().buffer } } });
+    assert.ok(last?.ok, `fuzz ${c}: worker extract ok`);
+    assert.equal(last.output.flags, mainGot.flags, `fuzz ${c}: flags parity`);
+    const wGot = new Uint8Array(last.output.payload);
+    assert.equal(wGot.length, mainGot.payload.length, `fuzz ${c}: payload length parity`);
+    for (let i = 0; i < wGot.length; i++) {
+      assert.equal(wGot[i], mainGot.payload[i], `fuzz ${c}: payload byte ${i} drifted`);
+    }
+    const fopened = await openPayload(mainGot.payload, mainGot.flags, flags === CIPHER.RAW ? '' : fpass);
+    for (let i = 0; i < fplain.length; i++) {
+      assert.equal(fopened[i], fplain[i], `fuzz ${c}: plaintext byte ${i} corrupted`);
+    }
+    assert.equal(fopened.length, fplain.length, `fuzz ${c}: plaintext length`);
+  }
+  console.log(`worker↔main parity fuzz ok · ${FUZZ_CASES} randomized cases`);
+
+  // noise parity: crypto-random LSBs cannot match byte-for-byte across runs —
+  // the shared contract is the touch count and the (upper bits + alpha preserved).
+  {
+    const nz = new Uint8Array(33 * 17 * 4);
+    for (let i = 0; i < nz.length; i++) nz[i] = (i * 91) & 0xff;
+    nz.forEach((_, i) => {
+      if ((i & 3) === 3) nz[i] = 255;
+    });
+    const mainNoise = nz.slice();
+    const touchedMain = randomizeLsb(mainNoise);
+    fakeSelf.onmessage!({ data: { id: 300, type: 'noise', input: { pixels: nz.slice().buffer } } });
+    assert.ok(last?.ok && last.output.touched === touchedMain, 'noise touch parity');
+    const wNoise = new Uint8Array(last.output.pixels);
+    assert.equal(wNoise.length, nz.length, 'noise length parity');
+    for (let i = 0; i < wNoise.length; i++) {
+      if ((i & 3) === 3) {
+        assert.equal(wNoise[i], nz[i], `alpha ${i} must be preserved`);
+      } else {
+        assert.equal(wNoise[i] & 0xfe, nz[i] & 0xfe, `upper bits ${i} must be preserved`);
+      }
+    }
+    console.log('worker noise contract ok');
+  }
+
   // ---- 5. steganalysis can flag an SBV2 carrier, passes clean images ----
   const { analyzeLsbPlane, detectSbv2Magic, threatAssessment, measureQuality, renderLsbPlane } = await import('../lib/analysis.ts');
   const sStego = analyzeLsbPlane(carrier, W, H);

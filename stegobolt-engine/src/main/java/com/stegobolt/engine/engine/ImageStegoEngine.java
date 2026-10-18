@@ -84,20 +84,18 @@ public final class ImageStegoEngine implements StegoEngine {
         BufferedImage img = decode(cover);
         long changed = 0;
         long randomized = 0;
-        if (randomizeLsb) {
-            java.security.SecureRandom rng = CryptoEngine.newRng();
-            for (int y = 0; y < img.getHeight(); y++) {
-                for (int x = 0; x < img.getWidth(); x++) {
-                    int rgb = img.getRGB(x, y);
-                    int before = rgb;
-                    for (int shift = 0; shift <= 16; shift += 8) {
-                        int bit = rng.nextInt(2);
-                        rgb = (rgb & ~(1 << shift)) | (bit << shift);
-                    }
-                    img.setRGB(x, y, rgb);
-                    changed += Integer.bitCount(before ^ rgb);
-                    randomized += CHANNELS;
+        java.security.SecureRandom rng = randomizeLsb ? CryptoEngine.newRng() : null;
+        for (int y = 0; y < img.getHeight(); y++) {
+            for (int x = 0; x < img.getWidth(); x++) {
+                int rgb = img.getRGB(x, y);
+                int before = rgb;
+                for (int shift = 0; shift <= 16; shift += 8) {
+                    int bit = rng != null ? rng.nextInt(2) : 0;
+                    rgb = (rgb & ~(1 << shift)) | (bit << shift);
                 }
+                img.setRGB(x, y, rgb);
+                changed += Integer.bitCount(before ^ rgb);
+                randomized += CHANNELS;
             }
         }
         return new SanitizeOutcome(encodePng(img), changed, randomized);

@@ -11,6 +11,7 @@ import javax.sound.sampled.AudioFileFormat;
 import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.AudioInputStream;
 import javax.sound.sampled.AudioSystem;
+import javax.sound.sampled.UnsupportedAudioFileException;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -104,7 +105,7 @@ public final class AudioStegoEngine implements StegoEngine {
                 throw new StegoException("Only byte-aligned PCM audio is supported (WAV / AIFF)");
             }
             return ais.readAllBytes();
-        } catch (IOException | RuntimeException e) {
+        } catch (IOException | UnsupportedAudioFileException | RuntimeException e) {
             if (e instanceof StegoException se) {
                 throw se;
             }
@@ -116,7 +117,7 @@ public final class AudioStegoEngine implements StegoEngine {
         try (AudioInputStream ais = AudioSystem.getAudioInputStream(new ByteArrayInputStream(cover))) {
             byte[] samples = ais.readAllBytes();
             return new AudioTrack(ais.getFormat(), samples, samples.length / Math.max(1, ais.getFormat().getFrameSize()));
-        } catch (IOException | RuntimeException e) {
+        } catch (IOException | UnsupportedAudioFileException | RuntimeException e) {
             throw new StegoException("Audio could not be decoded — expected WAV/PCM (or FLAC)", e);
         }
     }
@@ -244,7 +245,7 @@ public final class AudioStegoEngine implements StegoEngine {
         out.write((newLen >>> 16) & 0xFF);
         out.write((newLen >>> 8) & 0xFF);
         out.write(newLen & 0xFF);
-        out.write(payload);
+        out.write(payload, 0, payload.length);
         out.write(cover, audioStart, cover.length - audioStart);
         return out.toByteArray();
     }

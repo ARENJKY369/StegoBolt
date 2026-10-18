@@ -6,9 +6,10 @@
  * the nuclear “wipe this device” control.
  */
 
-import { Compass, Fingerprint, KeyRound, RotateCcw, ShieldCheck, ShieldX, Trash2 } from 'lucide-react';
+import { Compass, Fingerprint, KeyRound, Loader2, RotateCcw, Server, ShieldCheck, ShieldX, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { CIPHER, PBKDF2_ITERATIONS } from '@/lib/crypto';
+import { capacity as engineCapacity, getEngineBase, setEngineBase } from '@/lib/engineApi';
 import { clearDemoHistory } from '@/lib/vault';
 import { webauthnSupported } from '@/lib/webauthn';
 import { useVault } from '@/lib/session';
@@ -180,6 +181,47 @@ export function SettingsTab({ onReplayTour, onOpenPrivacy }: { onReplayTour: () 
         </p>
       </section>
 
+      <section className="card space-y-3 p-5">
+        <h3 className="card-title">Java Engine (optional backend)</h3>
+        <p className="text-[11.5px] leading-relaxed text-slate-500">
+          StegoBolt can delegate Hide &amp; Extract to the local Java 17 engine at{' '}
+          <span className="font-mono text-slate-400">http://localhost:8080</span> — same algorithms, but running outside the
+          browser with zero-disk RAM-only processing. Local mode keeps everything in this tab (recommended unless you are
+          operating the engine).
+        </p>
+        <div className="flex gap-2">
+          {(['local', 'engine'] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => vault.updateSettings({ engineMode: m })}
+              className={`rounded-lg border px-3 py-2 text-[12px] font-semibold transition ${
+                vault.settings.engineMode === m
+                  ? 'border-brand/50 bg-brand/10 text-emerald-300'
+                  : 'border-hair bg-panel2 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              {m === 'local' ? 'Local (in-browser)' : 'Java engine'}
+            </button>
+          ))}
+        </div>
+        <div>
+          <p className="label">Engine base URL</p>
+          <input
+            value={vault.settings.engineUrl}
+            onChange={(e) => vault.updateSettings({ engineUrl: e.target.value })}
+            onBlur={() => setEngineBase(vault.settings.engineUrl)}
+            className="input font-mono !text-[11.5px]"
+            placeholder="http://localhost:8080"
+            spellCheck={false}
+          />
+        </div>
+        <EngineProbe />
+        <p className="text-[10.5px] leading-relaxed text-slate-600">
+          The engine exposes <span className="font-mono">POST /api/v1/stego&#123;/hide,/extract,/scan,/clean,/capacity&#125;</span>.
+          Only this origin is allowed by the app&apos;s Content-Security-Policy; files never touch disk on the engine side.
+        </p>
+      </section>
+
       <section className="card border-red-500/25 p-5 xl:col-span-2">
         <h3 className="card-title text-red-300">Danger Zone</h3>
         <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -197,6 +239,50 @@ export function SettingsTab({ onReplayTour, onOpenPrivacy }: { onReplayTour: () 
         </div>
         {demoNote && <p className="mt-2 text-[11px] text-emerald-300">{demoNote}</p>}
       </section>
+    </div>
+  );
+}
+
+function EngineProbe() {
+  const vault = useVault();
+  const [state, setState] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const probe = async () => {
+    setBusy(true);
+    setState(null);
+    setEngineBase(vault.settings.engineUrl);
+    try {
+      // 1×1 transparent PNG — enough for the engine to sniff an image medium.
+      const png = new Uint8Array([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0a, 0x49,
+        0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00,
+        0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+      ]);
+      const report = await engineCapacity(new File([png], 'probe.png', { type: 'image/png' }));
+      setState({
+        ok: true,
+        msg: `Engine online at ${getEngineBase()} — probe PNG capacity ${report.capacityBytes} bytes (${report.medium}).`,
+      });
+      vault.log(`Java engine probe OK — ${report.medium} capacity ${report.capacityBytes} bytes`, 'ok');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setState({ ok: false, msg: `Engine unreachable: ${msg}` });
+      vault.log(`Java engine probe failed — ${msg}`, 'warn');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div>
+      <button onClick={() => void probe()} disabled={busy} className="btn-outline !py-2">
+        {busy ? <Loader2 size={13} className="animate-spin" /> : <Server size={13} />} Test engine connection
+      </button>
+      {state && (
+        <p className={`mt-2 text-[11px] leading-relaxed ${state.ok ? 'text-emerald-300' : 'text-amber-300'}`}>{state.msg}</p>
+      )}
     </div>
   );
 }

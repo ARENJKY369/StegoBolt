@@ -190,8 +190,8 @@ function UnderTheHood() {
           />
           <TechSpec
             icon={Fingerprint}
-            title="Hardware-bound biometrics via WebAuthn"
-            body="navigator.credentials.create/get with userVerification: required. Touch ID / Windows Hello / security keys act as a device-local gesture that releases a wrapped key — the master passphrase stays the only root secret, held in RAM and flushed on lock."
+            title="Hardware-bound biometrics via WebAuthn (cryptographically verified)"
+            body="navigator.credentials.create/get with userVerification: required. The credential's COSE public key is pinned at enrollment (SPKI when exposed, else parsed from the attestation CBOR) and every assertion's ES256/RS256 signature is verified over authenticatorData || SHA-256(clientDataJSON), with clientData type/challenge/origin binding — unlock fails closed on any mismatch. The verified assertion releases a device-wrapped key; the master passphrase stays the only root secret, held in RAM and flushed on lock."
           />
           <TechSpec
             icon={Activity}

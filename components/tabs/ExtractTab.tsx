@@ -13,6 +13,7 @@ import { measureQuality } from '@/lib/analysis';
 import { fmtBytes } from '@/lib/format';
 import { LsbError } from '@/lib/lsbcore';
 import { workerExtract } from '@/lib/worker';
+import { extract as engineExtract } from '@/lib/engineApi';
 import { addRecord } from '@/lib/vault';
 import { useVault } from '@/lib/session';
 import { FileDropzone } from '@/components/ui/Dropzone';
@@ -41,6 +42,13 @@ const FRIENDLY: Record<string, string> = {
   UNKNOWN_JOB: 'Internal pipeline error.',
 };
 
+function b64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
 export function ExtractTab() {
   const vault = useVault();
   const { loaded, pixels, loading, error, setError, load, clear } = useStegoFile();
@@ -51,7 +59,8 @@ export function ExtractTab() {
   const [copied, setCopied] = useState(false);
 
   const run = async () => {
-    if (!loaded || !pixels) {
+    const engineMode = vault.settings.engineMode === 'engine';
+    if (!loaded || (!pixels && !engineMode)) {
       setError('Load a stego image first.');
       return;
     }
@@ -59,6 +68,40 @@ export function ExtractTab() {
     setError(null);
     setResult(null);
     try {
+      if (engineMode && loaded) {
+        const report = await engineExtract(loaded.file, password);
+        if (!report.found) {
+          setError('No StegoBolt container found in this file — either it is a clean cover, or it was recompressed after embedding.');
+          vault.log(`Extract via Java engine — no container in ${loaded.name}`, 'warn');
+          return;
+        }
+        const plain = report.payloadBase64 ? b64ToBytes(report.payloadBase64) : new TextEncoder().encode(report.payloadText ?? '');
+        const text = report.payloadText ?? new TextDecoder().decode(plain);
+        setResult({ text, bytes: plain, cipher: CIPHER.RAW, sealedLen: report.payloadBytes ?? plain.length, bitsUsed: (report.payloadBytes ?? plain.length) * 8 });
+        vault.setArtifacts({
+          coverName: loaded.name,
+          coverInfo: `Stego carrier ${loaded.name} · ${fmtBytes(loaded.size)} · processed by the Java engine`,
+          payloadBytes: plain,
+          payloadInfo: `Payload recovered by the Java engine — ${fmtBytes(plain.length)} of plaintext`,
+        });
+        void addRecord({
+          ts: Date.now(),
+          op: 'Extract',
+          coverName: loaded.name,
+          size: loaded.size,
+          dims: '—',
+          backup: 'No local download',
+          hash: loaded.hash,
+          payloadPreview: `••• engine-extracted payload (${fmtBytes(plain.length)}) •••`,
+          meta: { Via: 'Java engine', 'Payload size': fmtBytes(plain.length) },
+        }).then(() => vault.refreshStorage());
+        vault.log(`Payload recovered via Java engine from ${loaded.name} — ${fmtBytes(plain.length)} of plaintext`, 'ok');
+        return;
+      }
+      if (!pixels) {
+        setError('Load a stego image first.');
+        return;
+      }
       const out = await workerExtract(pixels.data);
       const sealed = new Uint8Array(out.payload);
       let plain: Uint8Array;

@@ -217,13 +217,13 @@ public final class VideoStegoEngine implements StegoEngine {
             out.write('r');
             out.write('e');
             out.write('e');
-            out.write(payload);
+            out.write(payload, 0, payload.length);
         } else {
             // MKV: EBML Void (0xEC) + VINT size + payload
             out.write(cover, 0, cover.length);
-            out.write(VOID_ID);
+            out.write(VOID_ID, 0, VOID_ID.length);
             writeEbmlVint(out, payload.length);
-            out.write(payload);
+            out.write(payload, 0, payload.length);
         }
         return out.toByteArray();
     }
