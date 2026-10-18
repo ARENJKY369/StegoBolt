@@ -7,6 +7,8 @@
  * after a page reload.
  */
 
+import { sanitizeFileName } from './format';
+
 interface FSHandle {
   name: string;
   // deno-lint-ignore no-explicit-any
@@ -55,7 +57,8 @@ export async function pickBackupDir(): Promise<PickedDir | null> {
 
 export async function writeToDir(dir: FSHandle, fileName: string, blob: Blob): Promise<boolean> {
   try {
-    const fh = await dir.getFileHandle(fileName, { create: true });
+    const safeName = sanitizeFileName(fileName);
+    const fh = await dir.getFileHandle(safeName, { create: true });
     const writable = await fh.createWritable();
     await writable.write(blob);
     await writable.close();

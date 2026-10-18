@@ -68,18 +68,29 @@ export async function sha256Hex(data: ArrayBuffer | Uint8Array | Blob): Promise<
 export async function deriveAesKey(
   passphrase: string,
   salt: Uint8Array,
-  iterations: number = PBKDF2_ITERATIONS
+  iterations: number = PBKDF2_ITERATIONS,
+  extractable: boolean = false,
+  algName: 'AES-GCM' | 'AES-CTR' = 'AES-GCM'
 ): Promise<CryptoKey> {
+  // Payload keys are non-extractable by default; the vault session key opts in
+  // to `extractable: true` only so it can be wrapped for biometric unlock.
+  // WebCrypto binds an AES key to ONE AES variant, so CTR callers must derive
+  // an AES-CTR-named key — a GCM key cannot perform CTR operations.
+  const iter = Math.max(1, Math.floor(iterations));
   const base = await crypto.subtle.importKey('raw', textEnc.encode(passphrase), 'PBKDF2', false, [
     'deriveKey',
   ]);
   return crypto.subtle.deriveKey(
-    { name: 'PBKDF2', salt: salt as BufferSource, iterations, hash: 'SHA-256' },
+    { name: 'PBKDF2', salt: salt as BufferSource, iterations: iter, hash: 'SHA-256' },
     base,
-    { name: 'AES-GCM', length: 256 },
-    true,
+    { name: algName, length: 256 },
+    extractable,
     ['encrypt', 'decrypt']
   );
+}
+
+function deriveAesKeyForCipher(passphrase: string, salt: Uint8Array, cipher: number): Promise<CryptoKey> {
+  return deriveAesKey(passphrase, salt, PBKDF2_ITERATIONS, false, cipher === CIPHER.AES_256_CTR ? 'AES-CTR' : 'AES-GCM');
 }
 
 /* ---------- low level AE ciphers ---------- */
@@ -122,12 +133,20 @@ export function ivLenFor(cipher: number): number {
   return cipher === CIPHER.AES_256_CTR ? 16 : 12;
 }
 
+/** Reject anything that is not a known cipher id (container headers are untrusted). */
+export function assertKnownCipher(cipher: number): void {
+  if (cipher !== CIPHER.RAW && cipher !== CIPHER.AES_256_GCM && cipher !== CIPHER.AES_256_CTR) {
+    throw new Error('BAD_FLAGS');
+  }
+}
+
 export async function sealPayload(
   plain: Uint8Array,
   cipher: number,
   passphrase: string,
   sessionSalt?: Uint8Array
 ): Promise<Uint8Array> {
+  assertKnownCipher(cipher);
   if (cipher === CIPHER.RAW) {
     const out = new Uint8Array(16 + 12 + plain.length);
     crypto.getRandomValues(out.subarray(0, 28)); // decoy noise so raw payloads still look random
@@ -137,7 +156,7 @@ export async function sealPayload(
   const salt = sessionSalt ?? randomBytes(16);
   const ivLen = ivLenFor(cipher);
   const iv = randomBytes(ivLen);
-  const key = await deriveAesKey(passphrase, salt);
+  const key = await deriveAesKeyForCipher(passphrase, salt, cipher);
   const body =
     cipher === CIPHER.AES_256_CTR
       ? await ctrEncrypt(key, iv, plain)
@@ -154,6 +173,7 @@ export async function openPayload(
   cipher: number,
   passphrase: string
 ): Promise<Uint8Array> {
+  assertKnownCipher(cipher);
   if (cipher === CIPHER.RAW) {
     return sealed.subarray(28);
   }
@@ -162,7 +182,7 @@ export async function openPayload(
   const salt = sealed.subarray(0, 16);
   const iv = sealed.subarray(16, 16 + ivLen);
   const body = sealed.subarray(16 + ivLen);
-  const key = await deriveAesKey(passphrase, salt);
+  const key = await deriveAesKeyForCipher(passphrase, salt, cipher);
   if (cipher === CIPHER.AES_256_CTR) return await ctrDecrypt(key, iv, body);
   return await gcmDecrypt(key, iv, body); // throws OperationError on tamper / wrong pass
 }

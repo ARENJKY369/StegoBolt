@@ -2,12 +2,13 @@
   "name": "stegobolt",
   "version": "2.0.0",
   "private": true,
-  "description": "StegoBolt v2.0 — production-grade, zero-knowledge client-side steganography suite",
+  "description": "StegoBolt v2.0 \u2014 production-grade, zero-knowledge client-side steganography suite",
   "scripts": {
     "dev": "next dev -p 3000 -H 0.0.0.0",
     "build": "next build",
     "start": "next start -p 3000 -H 0.0.0.0",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types scripts/pipeline-test.ts"
   },
   "dependencies": {
     "dexie": "^4.0.8",

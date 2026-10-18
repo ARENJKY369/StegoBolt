@@ -57,6 +57,7 @@ function extract(inp){
   if(hd[0]!==MAGIC[0]||hd[1]!==MAGIC[1]||hd[2]!==MAGIC[2]||hd[3]!==MAGIC[3]) throw new Error('NOT_STEGO: no SBV2 container in the LSB plane');
   if(hd[4]!==VERSION) throw new Error('BAD_VERSION: container v'+hd[4]+' unsupported');
   var flags=hd[5];
+  if(flags>2) throw new Error('BAD_FLAGS: container cipher id '+flags+' unsupported');
   var len=((hd[6]<<24)|(hd[7]<<16)|(hd[8]<<8)|hd[9])>>>0;
   if(len===0||len>33554432) throw new Error('BAD_LENGTH: declared payload '+len+' bytes');
   var bits=HDR*8+len*8; if(bits>c) throw new Error('TRUNCATED: carrier was resized or recompressed lossily');
@@ -98,16 +99,8 @@ function buildWorker(): Promise<Worker | null> {
     const blob = new Blob([WORKER_SRC], { type: 'text/javascript' });
     const url = URL.createObjectURL(blob);
     const w = new Worker(url);
-    // prime: quick echo of a trivial job keeps URL alive
-    w.onerror = () => {
-      try {
-        w.terminate();
-      } catch {
-        /* noop */
-      }
-      workerPromise = Promise.resolve(null);
-      workerMode = 'main-thread';
-    };
+    // The worker has already fetched its script — release the blob URL immediately.
+    URL.revokeObjectURL(url);
     return Promise.resolve(w);
   } catch {
     return Promise.resolve(null);
@@ -125,7 +118,7 @@ function parseError(message: string): LsbError {
 }
 
 interface Pending {
-  resolve: (v: MessageEvent) => void;
+  resolve: (v: unknown) => void;
   reject: (e: unknown) => void;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -133,33 +126,58 @@ interface Pending {
 let seq = 1;
 const pending = new Map<number, Pending>();
 
+/** One persistent router per worker — safe for concurrent in-flight jobs. */
+const routed = new WeakSet<Worker>();
+
+function failAllPending(err: LsbError) {
+  for (const [, p] of pending) {
+    clearTimeout(p.timer);
+    p.reject(err);
+  }
+  pending.clear();
+}
+
+function ensureRouter(w: Worker): void {
+  if (routed.has(w)) return;
+  routed.add(w);
+  w.onmessage = (ev: MessageEvent) => {
+    const data = ev.data as { id: number; ok: boolean; output?: unknown; error?: string };
+    const p = pending.get(data.id);
+    if (!p) return;
+    clearTimeout(p.timer);
+    pending.delete(data.id);
+    if (data.ok) p.resolve(data.output);
+    else p.reject(parseError(data.error || 'WORKER_FAILURE'));
+  };
+  w.onerror = () => {
+    try {
+      w.terminate();
+    } catch {
+      /* noop */
+    }
+    workerPromise = Promise.resolve(null);
+    workerMode = 'main-thread';
+    failAllPending(new LsbError('WORKER_FAILURE', 'LSB worker crashed'));
+  };
+}
+
 function dispatch<T>(w: Worker, type: JobType, input: JobInput, timeoutMs = 60_000): Promise<T> {
   const id = seq++;
   return new Promise<T>((resolve, reject) => {
-    const prevOnMsg = w.onmessage;
-    const handler = (ev: MessageEvent) => {
-      const data = ev.data as { id: number; ok: boolean; output?: T; error?: string };
-      if (data.id !== id) {
-        prevOnMsg?.call(w, ev);
-        return;
-      }
-      const p = pending.get(id);
-      if (p) {
-        clearTimeout(p.timer);
-        pending.delete(id);
-      }
-      if (data.ok) resolve(data.output as T);
-      else reject(parseError(data.error || 'WORKER_FAILURE'));
-    };
-    w.onmessage = handler;
     const timer = setTimeout(() => {
       if (pending.delete(id)) {
-        w.onmessage = prevOnMsg;
         reject(new LsbError('WORKER_TIMEOUT', 'LSB worker did not respond within 60s'));
       }
     }, timeoutMs);
-    pending.set(id, { resolve: handler as never, reject, timer });
-    w.postMessage({ id, type, input }, [input.pixels]);
+    pending.set(id, { resolve: resolve as (v: unknown) => void, reject, timer });
+    ensureRouter(w);
+    try {
+      w.postMessage({ id, type, input }, [input.pixels]);
+    } catch (err) {
+      clearTimeout(timer);
+      pending.delete(id);
+      reject(err instanceof LsbError ? err : new LsbError('WORKER_FAILURE', String(err)));
+    }
   });
 }
 
@@ -184,13 +202,8 @@ export async function workerEmbed(data: Uint8Array, payload: Uint8Array, flags: 
   const copy = data.slice(); // keep caller's buffer intact; the copy gets transferred
   const w = await getWorker();
   if (w) {
-    try {
-      workerMode = 'worker';
-      return await dispatch<EmbedOutput>(w, 'embed', { pixels: copy.buffer as ArrayBuffer, payload: payload.slice().buffer as ArrayBuffer, flags });
-    } catch (err) {
-      if (err instanceof LsbError) throw err; // semantic errors are identical on both paths
-      throw err;
-    }
+    workerMode = 'worker';
+    return await dispatch<EmbedOutput>(w, 'embed', { pixels: copy.buffer as ArrayBuffer, payload: payload.slice().buffer as ArrayBuffer, flags });
   }
   workerMode = 'main-thread';
   const res = embedIntoPixels(copy, payload, flags);

@@ -176,6 +176,7 @@ export function inspectMetadata(buf: ArrayBuffer, _fileName = ''): MetadataRepor
       }
       const segLen = (u8[off + 2] << 8) | u8[off + 3];
       if (segLen < 2) break;
+      if (off + 2 + segLen > u8.length) break; // truncated / spoofed segment length
       if (marker === 0xe1 && segLen > 8) {
         const start = off + 4;
         const sig = String.fromCharCode(u8[start], u8[start + 1], u8[start + 2], u8[start + 3], u8[start + 4], u8[start + 5]);
@@ -198,6 +199,7 @@ export function inspectMetadata(buf: ArrayBuffer, _fileName = ''): MetadataRepor
     let off = 8;
     while (off + 8 < u8.length) {
       const len = ((u8[off] << 24) | (u8[off + 1] << 16) | (u8[off + 2] << 8) | u8[off + 3]) >>> 0;
+      if (len > 0x7fffffff || off + 12 + len > u8.length) break; // bounds first
       const type = ascii(u8, off + 4, 4);
       if (type === 'tEXt' || type === 'iTXt' || type === 'zTXt') {
         const keyword = ascii(u8, off + 8, Math.min(len, 40));
@@ -207,7 +209,6 @@ export function inspectMetadata(buf: ArrayBuffer, _fileName = ''): MetadataRepor
       if (type === 'eXIf') readTiff(u8, off + 8, report);
       if (type === 'pHYs') report.tags.push({ label: 'pHYs', value: 'physical pixel size' });
       if (type === 'IEND') break;
-      if (len > 0x7fffffff || off + 12 + len > u8.length) break;
       off += 12 + len;
     }
     return report;

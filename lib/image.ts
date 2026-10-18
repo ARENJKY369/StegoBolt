@@ -42,6 +42,11 @@ export async function decodeImageData(blob: Blob): Promise<DecodedPixels> {
   const width = bitmap.width;
   const height = bitmap.height;
   if (!width || !height) throw new Error('IMAGE_DECODE_FAILED');
+  // Decompression-bomb guard: a crafted PNG can declare absurd dimensions.
+  if (width * height > 64_000_000) {
+    bitmap.close?.();
+    throw new Error('IMAGE_TOO_LARGE');
+  }
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;

@@ -9,7 +9,7 @@
 import { ChevronDown, ChevronUp, Eye } from 'lucide-react';
 import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { fmtBytes, timeAgo } from '@/lib/format';
+import { fmtBytes, sanitizeFileName, timeAgo } from '@/lib/format';
 import { db, deleteRecord, getRecordBlob, type VaultRecord } from '@/lib/vault';
 import { useVault } from '@/lib/session';
 
@@ -17,7 +17,7 @@ export function downloadBlob(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = name;
+  a.download = sanitizeFileName(name);
   document.body.appendChild(a);
   a.click();
   a.remove();

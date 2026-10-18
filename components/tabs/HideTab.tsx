@@ -20,13 +20,14 @@ import {
   Sparkle,
 } from 'lucide-react';
 import { useMemo, useState, type ReactNode } from 'react';
-import { CIPHER, sealPayload, sha256Hex, textEnc } from '@/lib/crypto';
+import { CIPHER, ivLenFor, sealPayload, sha256Hex, textEnc } from '@/lib/crypto';
 import { dimsCapacityBytes } from '@/lib/lsbcore';
 import { encodeBlob } from '@/lib/image';
 import { measureQuality } from '@/lib/analysis';
 import { backupDir, fsapiSupported, pickBackupDir, writeToDir, suggestedBackupPath } from '@/lib/fsaccess';
 import { fmtBytes } from '@/lib/format';
 import { workerEmbed } from '@/lib/worker';
+import { hide as engineHide } from '@/lib/engineApi';
 import { addRecord, exportVaultFile, type VaultRecord } from '@/lib/vault';
 import { useVault } from '@/lib/session';
 import { FileDropzone } from '@/components/ui/Dropzone';
@@ -40,11 +41,12 @@ interface EmbedResult {
   blob: Blob;
   name: string;
   hash: string;
-  psnrDb: number;
-  mse: number;
-  ssim: number;
+  psnrDb: number | null;
+  mse: number | null;
+  ssim: number | null;
   bitsUsed: number;
-  capacityBits: number;
+  capacityBits: number | null;
+  viaEngine?: boolean;
 }
 
 export function HideTab() {
@@ -67,13 +69,18 @@ export function HideTab() {
     : loaded && loaded.width && loaded.height
     ? dimsCapacityBytes(loaded.width, loaded.height)
     : null;
-  const needed = payloadBytes + (encrypt ? 16 + 12 : 28) + 10;
+  // Sealed layout: salt(16) | iv(ivLenFor) | body — GCM body grows by the 16-byte tag.
+  const overhead =
+    cipher === CIPHER.RAW ? 28 : 16 + ivLenFor(cipher) + (cipher === CIPHER.AES_256_GCM ? 16 : 0);
+  const needed = payloadBytes + overhead + 10; // + SBV2 header
   const overCapacity = capacity != null && needed > capacity;
   const busy = stage !== null;
-  const canRun = !!pixels && payloadBytes > 0 && !overCapacity && (!encrypt || password.length > 0) && !busy;
+  const engineMode = vault.settings.engineMode === 'engine';
+  const canRun =
+    (!!loaded && (engineMode || !!pixels)) && payloadBytes > 0 && !overCapacity && (!encrypt || password.length > 0) && !busy;
 
   const runEmbed = async () => {
-    if (!loaded || !pixels) {
+    if (!loaded || (!pixels && !engineMode)) {
       setError('Select a lossless cover image (PNG / BMP / TIFF / WebP) first.');
       return;
     }
@@ -92,6 +99,72 @@ export function HideTab() {
     setError(null);
     setResult(null);
     try {
+      if (engineMode) {
+        setStage('Handing cover + payload to the Java engine (zero-disk, RAM-only)…');
+        const { report, stego } = await engineHide({
+          cover: loaded.file,
+          passphrase: password || 'stegobolt-unencrypted',
+          payloadText: payload,
+        });
+        const name = report.stegoFileName || loaded.name.replace(/\.[^.]+$/, '') + '.stego.png';
+        const hash = await sha256Hex(stego);
+        setResult({
+          blob: stego,
+          name,
+          hash,
+          psnrDb: report.psnrDb ?? null,
+          mse: null,
+          ssim: null,
+          bitsUsed: report.capacityUsedBits,
+          capacityBits: null,
+          viaEngine: true,
+        });
+        vault.setArtifacts({
+          coverName: loaded.name,
+          coverInfo: `Cover carrier ${loaded.name} · ${fmtBytes(loaded.size)} · processed by the Java engine`,
+          stegoBytes: new Uint8Array(await stego.arrayBuffer()),
+          stegoName: name,
+          stegoInfo: `Stego object ${name} · ${fmtBytes(report.stegoBytes)} · SHA-256 ${hash.slice(0, 16)}…`,
+          payloadInfo: `Payload sealed by the Java engine (PBKDF2 100k · AES-256-GCM) — ${fmtBytes(report.payloadBytes)}`,
+        });
+        let backup: VaultRecord['backup'] = vault.settings.autoSave ? 'Saved' : 'No local download';
+        if (vault.settings.backupToDisk && backupDir.handle) {
+          const ok = await writeToDir(backupDir.handle, name, stego);
+          backup = ok ? 'Saved to local disk' : 'Disk write failed';
+        }
+        if (vault.settings.autoSave) {
+          await addRecord({
+            ts: Date.now(),
+            op: 'Hide',
+            coverName: loaded.name,
+            outName: name,
+            size: stego.size,
+            dims: '—',
+            backup,
+            hash,
+            payloadPreview: `••• engine-sealed payload (${fmtBytes(report.payloadBytes)}) — only the passphrase opens it •••`,
+            meta: {
+              Via: 'Java engine',
+              'Bits used': report.capacityUsedBits.toLocaleString(),
+              PSNR: report.psnrDb != null ? `${report.psnrDb.toFixed(1)} dB` : '—',
+              Cipher: 'AES-256-GCM',
+            },
+            blob: stego,
+          });
+          vault.refreshStorage();
+        }
+        vault.log(
+          `Embed complete (Java engine) — ${report.capacityUsedBits.toLocaleString()} bits hidden in ${loaded.name}${
+            backup === 'Saved to local disk' ? `, mirrored to ${backupDir.path}` : vault.settings.autoSave ? ', saved to local vault' : ''
+          }`,
+          'ok'
+        );
+        return;
+      }
+      if (!pixels) {
+        setError('Select a lossless cover image (PNG / BMP / TIFF / WebP) first.');
+        return;
+      }
       setStage('Sealing payload with ' + (cipher === CIPHER.RAW ? 'raw bitstream' : 'AES-256-' + (cipher === CIPHER.AES_256_CTR ? 'CTR' : 'GCM') + ' (PBKDF2 · 100k iterations)'));
       const plain = textEnc.encode(payload);
       const sealed = await sealPayload(plain, cipher, password || 'stegobolt-unencrypted');
@@ -400,10 +473,10 @@ export function HideTab() {
             </div>
           </div>
           <div className="mt-4 grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
-            <Metric label={<>PSNR <InfoTip text={TIPS.PSNR} width={300} /></>} value={Number.isFinite(result.psnrDb) ? `${result.psnrDb.toFixed(2)} dB` : '∞'} good={result.psnrDb > 40} />
-            <Metric label={<>SSIM <InfoTip text={TIPS.SSIM} width={280} /></>} value={result.ssim.toFixed(5)} good={result.ssim > 0.99} />
-            <Metric label="Bits embedded" value={`${(result.bitsUsed / 8).toFixed(0)} B / ${((result.bitsUsed / result.capacityBits) * 100).toFixed(3)}%`} />
-            <Metric label="MSE · carrier" value={`${result.mse.toFixed(4)} · ${typeBadge(result.name, 'image/png')} ${fmtBytes(result.blob.size)}`} />
+            <Metric label={<>PSNR <InfoTip text={TIPS.PSNR} width={300} /></>} value={result.psnrDb == null ? '—' : Number.isFinite(result.psnrDb) ? `${result.psnrDb.toFixed(2)} dB` : '∞'} good={result.psnrDb != null && result.psnrDb > 40} />
+            <Metric label={<>SSIM <InfoTip text={TIPS.SSIM} width={280} /></>} value={result.ssim == null ? (result.viaEngine ? 'engine-reported' : '—') : result.ssim.toFixed(5)} good={result.ssim != null && result.ssim > 0.99} />
+            <Metric label="Bits embedded" value={result.capacityBits ? `${(result.bitsUsed / 8).toFixed(0)} B / ${((result.bitsUsed / result.capacityBits) * 100).toFixed(3)}%` : `${(result.bitsUsed / 8).toFixed(0)} B`} />
+            <Metric label="MSE · carrier" value={`${result.mse == null ? '—' : result.mse.toFixed(4)} · ${typeBadge(result.name, result.viaEngine ? loaded?.type || 'application/octet-stream' : 'image/png')} ${fmtBytes(result.blob.size)}`} />
           </div>
           <p className="mt-3 text-[10.5px] leading-relaxed text-slate-500">
             Imperceptible modification verified — the SBV2 container lives only in the lowest bit of R/G/B bytes. To recover: switch to

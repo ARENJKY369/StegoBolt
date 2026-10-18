@@ -56,3 +56,28 @@ export function fmtSci(n: number): string {
   }
   return n.toFixed(4);
 }
+
+/**
+ * Safe output filename: strips path separators, control chars, Windows
+ * reserved names and CWD-relative tricks before any disk write or download.
+ * (Defense-in-depth — the File System Access API and download attribute
+ * already reject separators, but never trust a carrier/manifest name.)
+ */
+export function sanitizeFileName(name: string, fallback = 'stegobolt.bin'): string {
+  if (typeof name !== 'string') return fallback;
+  let out = name
+    .replace(/[/\\]/g, '_')
+    .replace(/[\u0000-\u001f\u007f<>:"|?*]/g, '')
+    .replace(/^\.+/, '')
+    .trim();
+  if (!out) return fallback;
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(out.replace(/\.[^.]*$/, ''))) {
+    out = `_${out}`;
+  }
+  if (out.length > 180) {
+    const dot = out.lastIndexOf('.');
+    const ext = dot > 0 && out.length - dot <= 12 ? out.slice(dot) : '';
+    out = out.slice(0, 180 - ext.length) + ext;
+  }
+  return out;
+}

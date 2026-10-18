@@ -134,6 +134,7 @@ export function extractFromPixels(data: Uint8Array): ExtractedBits {
   const version = head[4];
   if (version !== SB_VERSION) throw new LsbError('BAD_VERSION', `container v${version} unsupported`);
   const flags = head[5];
+  if (flags > 2) throw new LsbError('BAD_FLAGS', `container cipher id ${flags} unsupported`);
   const len = ((head[6] << 24) | (head[7] << 16) | (head[8] << 8) | head[9]) >>> 0;
   if (len === 0 || len > 32 * 1024 * 1024) throw new LsbError('BAD_LENGTH', `declared payload ${len} bytes`);
   const bits = HEADER_BITS + len * 8;

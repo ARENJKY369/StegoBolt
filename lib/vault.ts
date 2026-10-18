@@ -121,8 +121,39 @@ export interface ImportResult {
   format: string;
 }
 
+const MAX_IMPORT_CHARS = 2_000_000; // 2 MB JSON ceiling before parse
+const IMPORT_OPS: OpKind[] = ['Hide', 'Extract', 'Scan', 'Sanitize', 'Import', 'Delete'];
+
+function cleanStr(v: unknown, max: number, fallback?: string): string | undefined {
+  if (typeof v === 'string') {
+    const trimmed = v.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, max);
+    return trimmed || fallback;
+  }
+  return fallback;
+}
+
+function cleanMeta(v: unknown): Record<string, string | number> | undefined {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const out: Record<string, string | number> = {};
+  let n = 0;
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (n >= 12) break;
+    const key = cleanStr(k, 40);
+    if (!key) continue;
+    if (typeof val === 'number' && Number.isFinite(val)) out[key] = val;
+    else {
+      const s = cleanStr(val, 120);
+      if (s !== undefined) out[key] = s;
+    }
+    n++;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 export async function importVaultFile(file: File): Promise<ImportResult> {
+  if (file.size > MAX_IMPORT_CHARS) throw new Error('Vault file too large (max 2 MB)');
   const text = await file.text();
+  if (text.length > MAX_IMPORT_CHARS) throw new Error('Vault file too large (max 2 MB)');
   let data: {
     format?: string;
     records?: {
@@ -143,19 +174,24 @@ export async function importVaultFile(file: File): Promise<ImportResult> {
   } catch {
     throw new Error('Not a valid .stegvault JSON container');
   }
+  if (!data || typeof data !== 'object') throw new Error('Not a valid .stegvault JSON container');
   if (data.format !== 'stegvault/v1') throw new Error('Unsupported vault format (expected stegvault/v1)');
-  const rows = (data.records ?? []).slice(0, 500).map((r) => ({
-    ts: typeof r.ts === 'number' ? r.ts : Date.now(),
-    op: (r.op ?? 'Import') as OpKind,
-    coverName: r.coverName ?? 'unknown',
-    outName: r.outName ?? undefined,
-    size: r.size ?? 0,
-    dims: r.dims ?? undefined,
-    backup: 'No local download',
-    hash: r.hash ?? '',
-    payloadPreview: r.payloadPreview ?? undefined,
-    meta: { ...(r.meta ?? {}), importedFrom: file.name },
-  }));
+  const rows = (Array.isArray(data.records) ? data.records : []).slice(0, 500).map((r) => {
+    const rec = r && typeof r === 'object' ? r : ({} as Record<string, unknown>);
+    const ts = typeof rec.ts === 'number' && Number.isFinite(rec.ts) ? rec.ts : Date.now();
+    return {
+      ts: Math.min(Math.max(ts, 0), Date.now() + 86_400_000),
+      op: (IMPORT_OPS as string[]).includes(rec.op as string) ? (rec.op as OpKind) : 'Import',
+      coverName: cleanStr(rec.coverName, 160, 'unknown')!,
+      outName: cleanStr(rec.outName, 160),
+      size: typeof rec.size === 'number' && Number.isFinite(rec.size) && rec.size >= 0 ? Math.min(rec.size, 1e12) : 0,
+      dims: cleanStr(rec.dims, 40),
+      backup: 'No local download' as const,
+      hash: cleanStr(rec.hash, 128, '')!,
+      payloadPreview: cleanStr(rec.payloadPreview, 240),
+      meta: { ...(cleanMeta(rec.meta) ?? {}), importedFrom: cleanStr(file.name, 160, 'import')! },
+    };
+  });
   if (!rows.length) return { added: 0, format: data.format };
   try {
     await db().operations.bulkAdd(rows as VaultRecord[]);
