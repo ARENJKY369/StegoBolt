@@ -3,7 +3,7 @@
 Production-grade steganography & media sanitization web app that runs **100% in the browser**.
 No backend. No accounts. No telemetry. Your cover files, payloads and keys never leave the device.
 
-Built with **Next.js (App Router) · TypeScript · Tailwind CSS · Lucide Icons · Web Crypto API · Canvas API · Web Workers · IndexedDB (Dexie) · WebAuthn · File System Access API**.
+Built with **Next.js (App Router) · TypeScript · Tailwind CSS · Lucide Icons · Web Crypto API · Canvas API · Web Workers · IndexedDB (Dexie) · WebAuthn · File System Access API** — plus the optional **StegoBolt Engine**, a 100% Java 17 / Spring Boot 3.x in-memory backend (`stegobolt-engine/`).
 
 ## Quick start
 
@@ -12,6 +12,9 @@ npm install
 npm run dev        # http://localhost:3000 — first visit lands on the local vault lock screen
 npm run build      # production build
 node --experimental-strip-types scripts/pipeline-test.ts   # core engine verification suite
+
+# Optional — the Java engine (REST API on http://localhost:8080/api/v1/stego)
+cd stegobolt-engine && mvn spring-boot:run
 ```
 
 ## Feature map
@@ -26,7 +29,7 @@ node --experimental-strip-types scripts/pipeline-test.ts   # core engine verific
 | **Sanitize & Clean** | EXIF/XMP tag enumeration (JPEG APP1 TIFF parser incl. GPS), canvas re-encode metadata strip, CSPRNG LSB noise-floor re-randomization, PSNR/changed-bits diff report. |
 | **Onboarding tour** | 5-step spotlight tour (`components/onboarding/TourGuide.tsx`) auto-launched on first login: Mode Switcher → Dropzone/SHA-256 → Security & Encryption → Local Vault/PC Backup → Hex Inspector. Skippable, replayable from Settings. |
 | **Hover tooltips** | `<Tooltip>`/`(?)` badge system on every technical term: LSB, PSNR, AES-256-GCM, EXIF, PBKDF2, IndexedDB, FSA, chi-square, SSIM, threat score. |
-| **Docs & legal** | **About** modal (overview, security manifesto, architecture specs) · **User Manual & Technical Glossary** (searchable; How-To Guides + glossary table) · **Privacy Policy & Terms of Service** (first-run notice with *Acknowledge & Close*). |
+| **Docs & legal** | **About** modal (two-tier: plain-language *At a Glance* — what it is, how it protects you, supported mediums grid — with *Under the Hood* technical specs in a collapsible auditor accordion) · **User Manual & Technical Glossary** (searchable; How-To Guides + glossary table) · **Privacy Policy & Terms of Service** (first-run notice with *Acknowledge & Close*). |
 | **Local Vault & Backups** | Live IndexedDB journal (Dexie `useLiveQuery`), history table with Download / View Payload / Delete, `.stegvault` export/import, PC folder binding via File System Access API, one-click purge. |
 | **Footer console** | Collapsible hexadecimal + LSB-binary inspector of the last in-RAM buffers, plus persistent status bar (session, crypto, IndexedDB record count, worker mode, `TELEMETRY: DISABLED`). |
 
@@ -38,8 +41,22 @@ node --experimental-strip-types scripts/pipeline-test.ts   # core engine verific
 - `lib/exif.ts` — minimal TIFF/IFD0 + GPS sub-IFD reader for metadata previews.
 - `lib/vault.ts` — Dexie IndexedDB journal, `.stegvault` manifest, demo history seeding.
 - `lib/session.tsx` — the RAM-only key holder, auto-lock lifecycle, settings, artifacts and system log.
+- `lib/engineApi.ts` — typed client for the optional Java engine at `http://localhost:8080/api/v1/stego`.
 
 Zero network calls are made with user data: the app contains no `fetch`/XHR targets, no external fonts, no analytics.
+
+## StegoBolt Engine (Java 17 / Spring Boot 3.x)
+
+`stegobolt-engine/` is the production-grade **100% Java** backend for operators who
+want server-side steganography processing with zero-knowledge guarantees:
+
+- **REST surface** — `POST /api/v1/stego/{hide,extract,scan,clean,capacity}` over `multipart/form-data`.
+- **All six mediums** — Image (pixel LSB via `BufferedImage`/`ImageIO`), Audio (WAV sample LSB via `javax.sound.sampled`), Video (frame LSB / container padding), Documents (hidden PDF/DOCX streams), Text/Code (zero-width Unicode + trailing whitespace), Network (PCAP IP-ID header LSBs).
+- **JCA crypto** — `PBKDF2WithHmacSHA256` @ 100k + `AES/GCM/NoPadding`, `SecureRandom` salts/IVs.
+- **Pure-Java steganalysis** — Westfeld chi-square, sample-pair analysis (SPA), LSB entropy, `commons-imaging` EXIF enumeration.
+- **Zero-disk / zero-log** — volatile RAM only (multipart threshold set to 2 GiB, uploads capped at 64 MiB), every buffer zero-wiped in `finally` blocks, no payload logging anywhere.
+
+See [`stegobolt-engine/README.md`](stegobolt-engine/README.md) for the full API reference.
 
 ## Security disclaimer
 

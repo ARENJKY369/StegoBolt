@@ -19,6 +19,10 @@ export interface LoadedFile {
 
 /** Shared loader for every workspace tab: object-URL preview, SHA-256, dims,
  *  optional full ImageData decode for pixel operations. */
+
+/** In-RAM ceiling — a hostile 2 GB "image" would otherwise freeze the tab. */
+export const MAX_LOAD_BYTES = 512 * 1024 * 1024;
+
 export function useStegoFile(opts: { decode?: boolean } = {}) {
   const [loaded, setLoaded] = useState<LoadedFile | null>(null);
   const [pixels, setPixels] = useState<DecodedPixels | null>(null);
@@ -41,6 +45,10 @@ export function useStegoFile(opts: { decode?: boolean } = {}) {
       setLoading(true);
       setError(null);
       try {
+        if (file.size > MAX_LOAD_BYTES) {
+          setError('File exceeds the 512 MB in-browser processing ceiling. Trim the carrier first — everything is held in RAM.');
+          return false;
+        }
         if (urlRef.current) URL.revokeObjectURL(urlRef.current);
         const isImage = /^image\//.test(file.type) || /\.(png|jpe?g|bmp|gif|webp|tiff?)$/i.test(file.name);
         const previewUrl = isImage ? URL.createObjectURL(file) : null;

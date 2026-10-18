@@ -20,7 +20,7 @@ import {
   Sparkle,
 } from 'lucide-react';
 import { useMemo, useState, type ReactNode } from 'react';
-import { CIPHER, sealPayload, sha256Hex, textEnc } from '@/lib/crypto';
+import { CIPHER, ivLenFor, sealPayload, sha256Hex, textEnc } from '@/lib/crypto';
 import { dimsCapacityBytes } from '@/lib/lsbcore';
 import { encodeBlob } from '@/lib/image';
 import { measureQuality } from '@/lib/analysis';
@@ -67,7 +67,10 @@ export function HideTab() {
     : loaded && loaded.width && loaded.height
     ? dimsCapacityBytes(loaded.width, loaded.height)
     : null;
-  const needed = payloadBytes + (encrypt ? 16 + 12 : 28) + 10;
+  // Sealed layout: salt(16) | iv(ivLenFor) | body — GCM body grows by the 16-byte tag.
+  const overhead =
+    cipher === CIPHER.RAW ? 28 : 16 + ivLenFor(cipher) + (cipher === CIPHER.AES_256_GCM ? 16 : 0);
+  const needed = payloadBytes + overhead + 10; // + SBV2 header
   const overCapacity = capacity != null && needed > capacity;
   const busy = stage !== null;
   const canRun = !!pixels && payloadBytes > 0 && !overCapacity && (!encrypt || password.length > 0) && !busy;

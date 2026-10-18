@@ -205,7 +205,10 @@ export function VaultProvider({ children }: { children: ReactNode }) {
   const deriveFromSetup = useCallback(async (passphrase: string): Promise<CryptoKey> => {
     const setup = lsGetJson<SetupBlob | null>(K_SETUP, null);
     if (!setup) throw new Error('NO_SETUP');
-    const key = await deriveAesKey(passphrase, fromB64(setup.salt), setup.iterations || PBKDF2_ITERATIONS);
+    // Never weaken below the current KDF cost — a corrupted or tampered blob
+    // cannot downgrade PBKDF2 iterations.
+    const iterations = Math.max(PBKDF2_ITERATIONS, Math.floor(setup.iterations || 0));
+    const key = await deriveAesKey(passphrase, fromB64(setup.salt), iterations, true);
     const pt = await gcmDecrypt(key, fromB64(setup.iv), fromB64(setup.ct));
     if (textDec.decode(pt) !== VERIFIER) throw new Error('VERIFIER_MISMATCH');
     return key;
@@ -282,7 +285,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     async (passphrase: string, enroll: boolean): Promise<'ok' | 'weak'> => {
       if (passphrase.length < 8) return 'weak';
       const salt = randomBytes(16);
-      const key = await deriveAesKey(passphrase, salt);
+      const key = await deriveAesKey(passphrase, salt, PBKDF2_ITERATIONS, true);
       const iv = randomBytes(12);
       const ct = await gcmEncrypt(key, iv, textEnc.encode(VERIFIER));
       lsSetJson(K_SETUP, { salt: toB64(salt), iv: toB64(iv), ct: toB64(ct), iterations: PBKDF2_ITERATIONS });
@@ -323,7 +326,7 @@ export function VaultProvider({ children }: { children: ReactNode }) {
         return 'bad';
       }
       const salt = randomBytes(16);
-      const key = await deriveAesKey(newPass, salt);
+      const key = await deriveAesKey(newPass, salt, PBKDF2_ITERATIONS, true);
       const iv = randomBytes(12);
       const ct = await gcmEncrypt(key, iv, textEnc.encode(VERIFIER));
       lsSetJson(K_SETUP, { salt: toB64(salt), iv: toB64(iv), ct: toB64(ct), iterations: PBKDF2_ITERATIONS });
@@ -454,7 +457,11 @@ export function VaultProvider({ children }: { children: ReactNode }) {
     setSetupExists(false);
     setBiometricReady(false);
     setStatus('unconfigured');
-    setArtifactsState({});
+    // zeroize in-RAM cover / stego / payload buffers before dropping references
+    setArtifactsState((prev) => {
+      wipe(prev.coverBytes, prev.stegoBytes, prev.payloadBytes);
+      return {};
+    });
     log('💥 All local vault state erased (passphrase, verifier, biometric wrap, IndexedDB history)', 'err');
   }, [log]);
 

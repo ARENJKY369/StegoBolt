@@ -68,16 +68,20 @@ export async function sha256Hex(data: ArrayBuffer | Uint8Array | Blob): Promise<
 export async function deriveAesKey(
   passphrase: string,
   salt: Uint8Array,
-  iterations: number = PBKDF2_ITERATIONS
+  iterations: number = PBKDF2_ITERATIONS,
+  extractable: boolean = false
 ): Promise<CryptoKey> {
+  // Payload keys are non-extractable by default; the vault session key opts in
+  // to `extractable: true` only so it can be wrapped for biometric unlock.
+  const iter = Math.max(1, Math.floor(iterations));
   const base = await crypto.subtle.importKey('raw', textEnc.encode(passphrase), 'PBKDF2', false, [
     'deriveKey',
   ]);
   return crypto.subtle.deriveKey(
-    { name: 'PBKDF2', salt: salt as BufferSource, iterations, hash: 'SHA-256' },
+    { name: 'PBKDF2', salt: salt as BufferSource, iterations: iter, hash: 'SHA-256' },
     base,
     { name: 'AES-GCM', length: 256 },
-    true,
+    extractable,
     ['encrypt', 'decrypt']
   );
 }
@@ -122,12 +126,20 @@ export function ivLenFor(cipher: number): number {
   return cipher === CIPHER.AES_256_CTR ? 16 : 12;
 }
 
+/** Reject anything that is not a known cipher id (container headers are untrusted). */
+export function assertKnownCipher(cipher: number): void {
+  if (cipher !== CIPHER.RAW && cipher !== CIPHER.AES_256_GCM && cipher !== CIPHER.AES_256_CTR) {
+    throw new Error('BAD_FLAGS');
+  }
+}
+
 export async function sealPayload(
   plain: Uint8Array,
   cipher: number,
   passphrase: string,
   sessionSalt?: Uint8Array
 ): Promise<Uint8Array> {
+  assertKnownCipher(cipher);
   if (cipher === CIPHER.RAW) {
     const out = new Uint8Array(16 + 12 + plain.length);
     crypto.getRandomValues(out.subarray(0, 28)); // decoy noise so raw payloads still look random
@@ -154,6 +166,7 @@ export async function openPayload(
   cipher: number,
   passphrase: string
 ): Promise<Uint8Array> {
+  assertKnownCipher(cipher);
   if (cipher === CIPHER.RAW) {
     return sealed.subarray(28);
   }

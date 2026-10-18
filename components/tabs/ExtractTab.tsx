@@ -33,8 +33,10 @@ const FRIENDLY: Record<string, string> = {
   NOT_STEGO: 'No SBV2 container found in this file’s LSB plane. Either it is a clean cover — or it was lossy-recompressed after embedding.',
   TOO_SMALL: 'The image is too small to hold even a container header.',
   BAD_LENGTH: 'The container header is corrupt or spoofed (invalid payload length).',
+  BAD_FLAGS: 'The container declares an unknown cipher id — corrupt or spoofed header.',
   TRUNCATED: 'The carrier was resized/re-encoded after embedding — the hidden stream is cut off.',
   CAPACITY_EXCEEDED: 'Payload exceeds carrier capacity.',
+  IMAGE_TOO_LARGE: 'Image exceeds the 64 megapixel processing ceiling.',
   WORKER_TIMEOUT: 'The LSB worker timed out. Try a smaller file.',
   UNKNOWN_JOB: 'Internal pipeline error.',
 };
