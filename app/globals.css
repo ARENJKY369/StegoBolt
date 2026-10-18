@@ -1,0 +1,90 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  height: 100%;
+  background: #0a0e13;
+}
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: rgba(34, 197, 94, 0.35);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #263041 transparent;
+}
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #263041;
+  border-radius: 8px;
+  border: 2px solid #0a0e13;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border border-hair bg-panel shadow-card;
+  }
+  .card-title {
+    @apply text-[15px] font-semibold tracking-tight text-slate-100;
+  }
+  .label {
+    @apply mb-1.5 block text-[12px] font-medium text-slate-400;
+  }
+  .input {
+    @apply w-full rounded-lg border border-hair bg-panel2 px-3 py-2 text-[13px] text-slate-200 outline-none transition placeholder:text-slate-500 focus:border-brand/60 focus:ring-2 focus:ring-brand/15;
+  }
+  .select {
+    @apply input appearance-none pr-8;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2394a3b8' stroke-width='1.5'/%3E%3C/svg%3E");
+    background-position: right 10px center;
+    background-repeat: no-repeat;
+  }
+  .btn-green {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg bg-[#22a35b] px-4 py-2.5 text-[12.5px] font-bold uppercase tracking-[0.06em] text-white shadow-[0_4px_18px_rgba(34,197,94,0.25)] transition hover:bg-[#1e9153] active:translate-y-px disabled:cursor-not-allowed disabled:opacity-45;
+  }
+  .btn-outline {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-hair2 bg-panel2 px-4 py-2.5 text-[12.5px] font-semibold tracking-wide text-slate-300 transition hover:border-slate-500 hover:text-slate-100 active:translate-y-px disabled:cursor-not-allowed disabled:opacity-45;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px] font-medium text-slate-400 transition hover:bg-panel3 hover:text-slate-100;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-md border border-hair bg-panel2 px-2 py-0.5 font-mono text-[10.5px] text-slate-300;
+  }
+  .th {
+    @apply px-4 py-2.5 text-left text-[12px] font-medium text-slate-400;
+  }
+  .td {
+    @apply px-4 py-3 text-[13px] text-slate-200;
+  }
+  .link-green {
+    @apply cursor-pointer font-medium text-emerald-400 transition hover:text-emerald-300;
+  }
+}
+
+.grid-bg {
+  background-image: radial-gradient(rgba(148, 163, 184, 0.06) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
+.hex-cell {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
