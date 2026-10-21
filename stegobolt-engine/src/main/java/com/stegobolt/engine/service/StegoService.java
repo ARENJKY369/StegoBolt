@@ -104,10 +104,13 @@ public final class StegoService {
             Medium medium = Sniffer.sniff(cover, coverName);
             StegoEngine engine = engineFor(medium, textMode);
             long capacity = engine.capacityBits(cover);
-            long needed = payload.length * 8L + (long) Packet.HEADER * 8L;
+            // The capacity contract is plaintext bytes. SBV2-J contributes a
+            // 40-byte frame and AES-GCM contributes its 16-byte tag.
+            long needed = (payload.length + Packet.PLAINTEXT_OVERHEAD) * 8L;
             if (needed > capacity) {
                 throw new StegoException("Payload too large for this " + medium.label().toLowerCase()
-                        + " — capacity is " + (capacity / 8) + " bytes including the 40-byte container header");
+                        + " — capacity is " + Math.max(0, capacity / 8 - Packet.PLAINTEXT_OVERHEAD)
+                        + " plaintext bytes after the SBV2-J frame and GCM tag");
             }
 
             Packet packet = CryptoEngine.seal(payload, passphrase, medium);
@@ -120,7 +123,7 @@ public final class StegoService {
                 if (medium == Medium.IMAGE) {
                     psnr = ImageStegoEngine.psnr(cover, stego);
                 }
-                String name = stegoFileName(stego, medium);
+                String name = stegoFileName(stego, medium, coverName);
                 work.out = stego;
                 work.fileName = name;
                 work.report = new com.stegobolt.engine.api.dto.HideReport(
@@ -157,6 +160,9 @@ public final class StegoService {
         byte[] container = null;
         byte[] plaintext = null;
         try {
+            if (passphrase == null || passphrase.length == 0) {
+                throw new StegoException("A passphrase is required");
+            }
             Medium medium = Sniffer.sniff(cover, coverName);
             StegoEngine engine = engineFor(medium, textMode);
             container = engine.extract(cover);
@@ -275,7 +281,7 @@ public final class StegoService {
             Double psnr = medium == Medium.IMAGE ? ImageStegoEngine.psnr(cover, outcome.cleaned()) : null;
 
             work.out = outcome.cleaned();
-            work.fileName = stegoFileName(outcome.cleaned(), medium);
+            work.fileName = stegoFileName(outcome.cleaned(), medium, coverName);
             work.report = new CleanReport(
                     medium.label(),
                     cover.length,
@@ -307,7 +313,9 @@ public final class StegoService {
             Medium medium = Sniffer.sniff(cover, coverName);
             StegoEngine engine = engineFor(medium, textMode);
             long capacityBits = engine.capacityBits(cover);
-            long capacityBytes = capacityBits / 8 - Packet.HEADER;
+            // Report usable plaintext headroom, not raw container room. This
+            // keeps the UI's preflight result exactly aligned with /hide.
+            long capacityBytes = capacityBits / 8 - Packet.PLAINTEXT_OVERHEAD;
             if (capacityBytes < 0) {
                 capacityBytes = 0;
             }
@@ -377,16 +385,31 @@ public final class StegoService {
         }
     }
 
-    private static String stegoFileName(byte[] stego, Medium medium) {
+    private static String stegoFileName(byte[] stego, Medium medium, String coverName) {
+        String inputExt = extensionOf(coverName);
         String ext = switch (medium) {
-            case IMAGE -> ".png";
-            case AUDIO -> ".wav";
-            case VIDEO -> ".bin";
-            case DOCUMENT -> ".bin";
-            case TEXT -> ".txt";
-            case NETWORK -> ".pcap";
+            case IMAGE -> ".png"; // ImageStegoEngine deliberately re-encodes losslessly.
+            case AUDIO -> inputExt.equals(".flac") ? ".flac" : ".wav";
+            case VIDEO -> switch (inputExt) {
+                case ".mp4", ".mkv", ".avi" -> inputExt;
+                default -> ".bin";
+            };
+            case DOCUMENT -> switch (inputExt) {
+                case ".pdf", ".docx" -> inputExt;
+                default -> ".bin";
+            };
+            case TEXT -> inputExt.isEmpty() ? ".txt" : inputExt;
+            case NETWORK -> inputExt.equals(".pcapng") ? ".pcapng" : ".pcap";
         };
         String hash = sha256(stego).substring(0, 12);
         return "stegobolt-" + hash + ext;
+    }
+
+    private static String extensionOf(String name) {
+        if (name == null) {
+            return "";
+        }
+        int dot = name.lastIndexOf('.');
+        return dot < 0 ? "" : name.substring(dot).toLowerCase(java.util.Locale.ROOT);
     }
 }

@@ -22,6 +22,10 @@ mvn test                   # unit + REST integration suite
 
 ## REST API (`multipart/form-data`)
 
+`GET /` returns a small non-sensitive health page. Client-shaped mistakes are
+mapped to friendly `400`, `405`, `413` or `415` JSON bodies instead of the
+catch-all engine failure response.
+
 | Endpoint | Fields | Response |
 | --- | --- | --- |
 | `POST /api/v1/stego/hide` | `cover` (file), `payload` (file) **or** `payloadText`, `passphrase`, `textMode?` | stego media (`application/octet-stream`) + `X-StegoBolt-Report` JSON header |
@@ -30,16 +34,16 @@ mvn test                   # unit + REST integration suite
 | `POST /api/v1/stego/clean` | `cover`, `randomizeLsb?`, `textMode?` | sanitized media + `X-StegoBolt-Report` JSON header |
 | `POST /api/v1/stego/capacity` | `cover`, `textMode?` | `CapacityReport` JSON |
 
-CORS allows the Next.js dev origin (`http://localhost:3000`).
+CORS allows local Next.js origins plus the supported Vercel and Arena preview origins; the engine does not use CORS as an authentication boundary.
 
 ## The six supported mediums
 
-1. **Image (PNG, BMP, WebP, GIF, TIFF)** — `ImageStegoEngine`: LSB of R/G/B pixel channels via `java.awt.image.BufferedImage` + `javax.imageio.ImageIO`, always re-encoded as lossless PNG.
+1. **Image (PNG, BMP, WebP, GIF, TIFF, JPEG)** — `ImageStegoEngine`: LSB of R/G/B pixel channels via `java.awt.image.BufferedImage` + `javax.imageio.ImageIO`, always re-encoded as lossless PNG.
 2. **Audio (WAV, FLAC)** — `AudioStegoEngine`: WAV secrets ride the PCM sample noise floor (`javax.sound.sampled`); FLAC secrets live in a hidden PADDING metadata block.
 3. **Video (MP4, MKV, AVI)** — `VideoStegoEngine`: uncompressed AVI frames get frame-LSB embedding; MP4/MKV use hidden structural padding (`free` box / EBML Void) so playback stays bit-perfect.
 4. **Document (PDF, DOCX)** — `DocumentStegoEngine`: DOCX gets a hidden OPC part (`word/stegobolt.bin`); PDF gets an invisible metadata stream via a spec-correct incremental update (xref + `/Prev` trailer).
-5. **Text & source code (TXT, Java, JS, C++)** — `TextStegoEngine`: zero-width Unicode (`\u200B`=0, `\u200C`=1) or trailing-whitespace bits (space=0, tab=1). Extraction is self-synchronizing (SB2J magic hunt).
-6. **Network / covert channels (PCAP, pcapng)** — `NetworkStegoEngine`: one secret bit per IPv4 packet in the LSB of the IP Identification header field (the classic TCP/IP header-padding channel). The packet-timing variant is documented below.
+5. **Text & source code (TXT, MD, Java, JS, TS, C, C++, H, HPP, PY, JSON, CSV)** — `TextStegoEngine`: zero-width Unicode (`\u200B`=0, `\u200C`=1) or trailing-whitespace bits (space=0, tab=1). Extraction is self-synchronizing (SB2J magic hunt).
+6. **Network / covert channels (PCAP, PCAPNG)** — `NetworkStegoEngine`: one secret bit per IPv4 packet in the LSB of the IP Identification header field (the classic TCP/IP header-padding channel). The packet-timing variant is documented below.
 
 ## Container format — SBV2-J
 

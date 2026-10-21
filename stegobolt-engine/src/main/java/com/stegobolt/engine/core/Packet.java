@@ -27,6 +27,10 @@ public final class Packet {
 
     public static final int SALT_LEN = 16;
     public static final int IV_LEN = 12;
+    /** AES-GCM appends a 128-bit authentication tag to every plaintext. */
+    public static final int GCM_TAG_LEN = 16;
+    /** Bytes occupied by the SBV2-J framing plus the GCM tag, excluding plaintext. */
+    public static final int PLAINTEXT_OVERHEAD = HEADER + GCM_TAG_LEN;
     public static final int MAX_CIPHERTEXT = 64 * 1024 * 1024;
 
     private final byte version;

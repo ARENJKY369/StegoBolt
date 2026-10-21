@@ -6,9 +6,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartException;
 import org.springframework.web.multipart.support.MissingServletRequestPartException;
 
 /**
@@ -22,7 +27,7 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(StegoException.class)
     public ResponseEntity<ErrorBody> handleStego(StegoException e) {
-        log.warn("stego failure: {}", e.getMessage());
+        log.warn("stego failure of type {}", e.getClass().getSimpleName());
         return ResponseEntity.badRequest()
                 .body(new ErrorBody("stego_error", e.getMessage()));
     }
@@ -37,6 +42,36 @@ public class ApiExceptionHandler {
     public ResponseEntity<ErrorBody> handleMissingPart(MissingServletRequestPartException e) {
         return ResponseEntity.badRequest()
                 .body(new ErrorBody("missing_part", "Required multipart field missing: " + e.getRequestPartName()));
+    }
+
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<ErrorBody> handleMissingParameter(MissingServletRequestParameterException e) {
+        return ResponseEntity.badRequest()
+                .body(new ErrorBody("missing_parameter", "Required request field missing: " + e.getParameterName()));
+    }
+
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ErrorBody> handleBadParameter(MethodArgumentTypeMismatchException e) {
+        return ResponseEntity.badRequest()
+                .body(new ErrorBody("invalid_parameter", "A request field has an invalid value"));
+    }
+
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ErrorBody> handleUnsupportedMedia(HttpMediaTypeNotSupportedException e) {
+        return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
+                .body(new ErrorBody("unsupported_media", "Send the carrier as multipart/form-data"));
+    }
+
+    @ExceptionHandler(MultipartException.class)
+    public ResponseEntity<ErrorBody> handleMultipart(MultipartException e) {
+        return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
+                .body(new ErrorBody("unsupported_media", "Send the carrier as multipart/form-data with a cover field"));
+    }
+
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ErrorBody> handleMethod(HttpRequestMethodNotSupportedException e) {
+        return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED)
+                .body(new ErrorBody("method_not_allowed", "This engine route accepts POST requests only"));
     }
 
     @ExceptionHandler(Exception.class)
