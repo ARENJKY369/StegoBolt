@@ -82,6 +82,7 @@ export interface ScanReport {
   medium: EngineMedium;
   carrierBytes: number;
   chiSquareStatistic: number;
+  /** Pair-equalisation survival probability — rises with LSB replacement, not with texture. */
   chiSquareProbability: number;
   spaEmbeddingRatio: number;
   lsbOnesRatio: number;
@@ -91,6 +92,15 @@ export interface ScanReport {
   threatScore: number;
   indicators: string[];
   exifTags?: string[];
+  /** Calibrated verdict fields (present on engine v2.1+; older engines omit them). */
+  level?: string;
+  confidence?: string;
+  summary?: string;
+  analysisBasis?: string;
+  /** False for media where LSB-plane statistics are not meaningful (documents, video, FLAC, text, PCAP). */
+  sampleBased?: boolean;
+  sampleSize?: number;
+  verdict?: string;
 }
 
 export interface CleanResponse {
@@ -164,6 +174,13 @@ function normalizeScan(raw: ScanReport): ScanReport {
     threatScore: Number(raw?.threatScore ?? 0),
     indicators: Array.isArray(raw?.indicators) ? raw.indicators.map(String) : [],
     exifTags: Array.isArray(raw?.exifTags) ? raw.exifTags.map(String) : [],
+    level: typeof raw?.level === 'string' ? raw.level.toUpperCase() : undefined,
+    confidence: typeof raw?.confidence === 'string' ? raw.confidence.toUpperCase() : undefined,
+    summary: typeof raw?.summary === 'string' ? raw.summary : undefined,
+    analysisBasis: typeof raw?.analysisBasis === 'string' ? raw.analysisBasis : undefined,
+    sampleBased: typeof raw?.sampleBased === 'boolean' ? raw.sampleBased : undefined,
+    sampleSize: raw?.sampleSize == null ? undefined : Number(raw.sampleSize),
+    verdict: typeof raw?.verdict === 'string' ? raw.verdict : undefined,
   };
 }
 

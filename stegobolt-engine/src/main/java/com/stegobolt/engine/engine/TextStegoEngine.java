@@ -93,6 +93,76 @@ public final class TextStegoEngine implements StegoEngine {
         return new SanitizeOutcome(cleanedText.getBytes(StandardCharsets.UTF_8), removed, removed);
     }
 
+    /**
+     * Structural inspection for the forensic scan: counts the covert-text
+     * carriers present in a document and reports whether any decoded bit stream
+     * starts with the SB2J marker (i.e. framing exists even if extraction fails).
+     */
+    public record TextInspection(int zeroWidthChars, int trailingWhitespaceLines,
+                                 boolean sb2jMarkerPresent) {
+    }
+
+    public static TextInspection inspect(byte[] cover) {
+        String text = new String(cover, StandardCharsets.UTF_8);
+        int zeroWidth = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == ZW0 || c == ZW1 || c == '\u200D' || c == '\uFEFF') {
+                zeroWidth++;
+            }
+        }
+        int trailing = 0;
+        for (String line : text.split("\n", -1)) {
+            if (line.endsWith(" ") || line.endsWith("\t")) {
+                trailing++;
+            }
+        }
+        boolean marker = containsMagicAtAnyOffset(zeroWidthBits(text)) || containsMagicAtAnyOffset(trailingBits(text));
+        return new TextInspection(zeroWidth, trailing, marker);
+    }
+
+    private static String zeroWidthBits(String text) {
+        StringBuilder bits = new StringBuilder();
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == ZW0) {
+                bits.append('0');
+            } else if (c == ZW1) {
+                bits.append('1');
+            }
+        }
+        return bits.toString();
+    }
+
+    private static String trailingBits(String text) {
+        StringBuilder bits = new StringBuilder();
+        for (String line : text.split("\n", -1)) {
+            if (line.endsWith(" ")) {
+                bits.append('0');
+            } else if (line.endsWith("\t")) {
+                bits.append('1');
+            }
+        }
+        return bits.toString();
+    }
+
+    private static boolean containsMagicAtAnyOffset(String bits) {
+        for (int offset = 0; offset + Packet.MAGIC.length * 8 <= bits.length(); offset++) {
+            boolean match = true;
+            for (int i = 0; i < Packet.MAGIC.length * 8; i++) {
+                int want = (Packet.MAGIC[i / 8] >>> (7 - (i % 8))) & 1;
+                if (bits.charAt(offset + i) != (char) ('0' + want)) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /* ------------------------------------------------------------------ */
     /* zero-width Unicode                                                  */
     /* ------------------------------------------------------------------ */

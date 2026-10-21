@@ -8,7 +8,17 @@
 
 import { AlertTriangle, Gauge, Loader2, Radar, ScanSearch } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { analyzeLsbPlane, detectSbv2Magic, renderLsbPlane, threatAssessment, type LsbStats, type ThreatVerdict } from '@/lib/analysis';
+import {
+  analyzeLsbPlane,
+  assessEngineScan,
+  inspectSbv2Container,
+  renderLsbPlane,
+  threatAssessment,
+  type LsbStats,
+  type Sbv2Inspection,
+  type ThreatConfidence,
+  type ThreatVerdict,
+} from '@/lib/analysis';
 import { fmtBytes, fmtInt, fmtSci } from '@/lib/format';
 import { capacityBits } from '@/lib/lsbcore';
 import { scan as engineScan, setEngineBase, type ScanReport } from '@/lib/engineApi';
@@ -26,6 +36,25 @@ const LEVEL_COLOR: Record<ThreatVerdict['level'], string> = {
   HIGH: '#f97316',
   CRITICAL: '#ef4444',
 };
+
+const CONFIDENCE_COLOR: Record<ThreatConfidence, string> = {
+  CONFIRMED: '#ef4444',
+  SUSPICIOUS: '#f97316',
+  INCONCLUSIVE: '#eab308',
+  CLEAN: '#22c55e',
+};
+
+function ConfidenceChip({ confidence }: { confidence: ThreatConfidence }) {
+  const color = CONFIDENCE_COLOR[confidence];
+  return (
+    <span
+      className="rounded-md px-1.5 py-0.5 text-[9px] font-bold tracking-[0.12em]"
+      style={{ color, backgroundColor: `${color}12`, boxShadow: `inset 0 0 0 1px ${color}44` }}
+    >
+      {confidence}
+    </span>
+  );
+}
 
 function GaugeArc({ score, color }: { score: number; color: string }) {
   const r = 54;
@@ -95,7 +124,8 @@ function LsbPlaneCanvas({ plane, width, height }: { plane: Uint8ClampedArray<Arr
 
 function EngineScanPanel({ report }: { report: ScanReport }) {
   const score = Math.max(0, Math.min(100, report.threatScore));
-  const tone = score >= 75 ? 'text-red-300' : score >= 40 ? 'text-amber-300' : 'text-emerald-300';
+  const verdict = assessEngineScan(report);
+  const tone = score >= 75 ? 'text-red-300' : score >= 50 ? 'text-orange-300' : score >= 25 ? 'text-amber-300' : 'text-emerald-300';
   return (
     <div className="space-y-4">
       <div className="rounded-xl border border-sky-500/25 bg-sky-500/5 p-4">
@@ -106,24 +136,36 @@ function EngineScanPanel({ report }: { report: ScanReport }) {
           </div>
           <p className={`font-mono text-2xl font-bold ${tone}`}>{score}<span className="text-xs text-slate-500">/100</span></p>
         </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span
+            className="rounded-md px-2 py-0.5 text-[10px] font-extrabold tracking-widest"
+            style={{ color: LEVEL_COLOR[verdict.level], backgroundColor: `${LEVEL_COLOR[verdict.level]}1f`, boxShadow: `inset 0 0 0 1px ${LEVEL_COLOR[verdict.level]}55` }}
+          >
+            {verdict.level}
+          </span>
+          <ConfidenceChip confidence={verdict.confidence} />
+          <span className="text-[10px] text-slate-500">{report.sampleBased === false ? 'structural evidence only' : 'sample-stream statistics'}</span>
+        </div>
+        <p className="mt-2 text-[12px] leading-relaxed text-slate-300">{verdict.summary}</p>
+        <p className="mt-1.5 text-[10.5px] leading-relaxed text-slate-500">{verdict.basis}</p>
       </div>
       <div className="grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
         <div className="rounded-lg border border-hair bg-panel2/50 px-2 py-2">
-          <p className="text-[9px] font-bold uppercase tracking-widest text-slate-500">Chi-square p</p>
-          <p className="mt-1 font-mono text-[12px] text-slate-200">{report.chiSquareProbability.toExponential(2)}</p>
+          <p className="text-[9px] font-bold uppercase tracking-widest text-slate-500">Pair equalisation p</p>
+          <p className="mt-1 font-mono text-[12px] text-slate-200">{report.sampleBased === false ? 'n/a' : report.chiSquareProbability.toExponential(2)}</p>
         </div>
         <div className="rounded-lg border border-hair bg-panel2/50 px-2 py-2">
-          <p className="text-[9px] font-bold uppercase tracking-widest text-slate-500">SPA ratio</p>
-          <p className="mt-1 font-mono text-[12px] text-slate-200">{report.spaEmbeddingRatio.toFixed(3)}</p>
+          <p className="text-[9px] font-bold uppercase tracking-widest text-slate-500">SPA rate est.</p>
+          <p className="mt-1 font-mono text-[12px] text-slate-200">{report.sampleBased === false ? 'n/a' : report.spaEmbeddingRatio.toFixed(3)}</p>
         </div>
         <div className="rounded-lg border border-hair bg-panel2/50 px-2 py-2">
           <p className="text-[9px] font-bold uppercase tracking-widest text-slate-500">LSB ones</p>
-          <p className="mt-1 font-mono text-[12px] text-slate-200">{report.lsbOnesRatio.toFixed(3)}</p>
+          <p className="mt-1 font-mono text-[12px] text-slate-200">{report.sampleBased === false ? 'n/a' : report.lsbOnesRatio.toFixed(3)}</p>
         </div>
         <div className="rounded-lg border border-hair bg-panel2/50 px-2 py-2">
           <p className="text-[9px] font-bold uppercase tracking-widest text-slate-500">Container</p>
           <p className={`mt-1 font-mono text-[12px] ${report.containerSignatureFound ? 'text-red-300' : 'text-emerald-300'}`}>
-            {report.containerSignatureFound ? 'found' : 'not found'}
+            {report.containerSignatureFound ? 'confirmed' : 'not found'}
           </p>
         </div>
       </div>
@@ -149,8 +191,12 @@ export function ScanTab() {
   const [stats, setStats] = useState<LsbStats | null>(null);
   const [verdict, setVerdict] = useState<ThreatVerdict | null>(null);
   const [plane, setPlane] = useState<{ arr: Uint8ClampedArray<ArrayBuffer>; w: number; h: number } | null>(null);
-  const [signature, setSignature] = useState<boolean | null>(null);
+  const [signature, setSignature] = useState<Sbv2Inspection | null>(null);
   const [engineReport, setEngineReport] = useState<ScanReport | null>(null);
+  // Engine reports carry their own calibrated verdict; fall back locally for
+  // older engines that omit the level/summary fields.
+  const engineVerdict = engineReport ? assessEngineScan(engineReport) : null;
+  const shownVerdict = verdict ?? engineVerdict;
 
   const run = useCallback(async () => {
     const engineMode = vault.settings.engineMode === 'engine';
@@ -178,7 +224,7 @@ export function ScanTab() {
         setStats(null);
         setVerdict(null);
         setPlane(null);
-        setSignature(report.containerSignatureFound);
+        setSignature(null);
         vault.setArtifacts({
           coverName: loaded.name,
           coverInfo: `Engine scan of ${loaded.name} · threat ${report.threatScore}/100`,
@@ -209,12 +255,12 @@ export function ScanTab() {
       // let the spinner paint first
       await new Promise((r) => setTimeout(r, 30));
       const s = analyzeLsbPlane(imagePixels.data, imagePixels.width, imagePixels.height);
-      const magic = detectSbv2Magic(imagePixels.data);
-      const v = threatAssessment(s, magic);
+      const container = inspectSbv2Container(imagePixels.data);
+      const v = threatAssessment(s, container);
       const planeArr = renderLsbPlane(imagePixels.data, imagePixels.width, imagePixels.height);
       setStats(s);
       setVerdict(v);
-      setSignature(magic);
+      setSignature(container);
       setPlane({ arr: planeArr, w: imagePixels.width, h: imagePixels.height });
       vault.setArtifacts({
         coverBytes: imagePixels.data,
@@ -310,12 +356,15 @@ export function ScanTab() {
       <section className="card p-5">
         <h3 className="card-title flex items-center justify-between">
           Threat Assessment
-          {verdict && (
-            <span
-              className="rounded-md px-2 py-0.5 text-[10px] font-extrabold tracking-widest"
-              style={{ color: LEVEL_COLOR[verdict.level], backgroundColor: `${LEVEL_COLOR[verdict.level]}1f`, boxShadow: `inset 0 0 0 1px ${LEVEL_COLOR[verdict.level]}55` }}
-            >
-              {verdict.level}
+          {shownVerdict && (
+            <span className="flex items-center gap-1.5">
+              <ConfidenceChip confidence={shownVerdict.confidence} />
+              <span
+                className="rounded-md px-2 py-0.5 text-[10px] font-extrabold tracking-widest"
+                style={{ color: LEVEL_COLOR[shownVerdict.level], backgroundColor: `${LEVEL_COLOR[shownVerdict.level]}1f`, boxShadow: `inset 0 0 0 1px ${LEVEL_COLOR[shownVerdict.level]}55` }}
+              >
+                {shownVerdict.level}
+              </span>
             </span>
           )}
         </h3>
@@ -336,11 +385,20 @@ export function ScanTab() {
               <div className="shrink-0 rounded-xl border border-hair bg-black/30 px-3 pb-1 pt-3">
                 <GaugeArc score={verdict.score} color={LEVEL_COLOR[verdict.level]} />
               </div>
-              <p className="flex items-start gap-2 text-[12px] leading-relaxed text-slate-300">
-                {verdict.level !== 'LOW' && <AlertTriangle size={13} className="mt-0.5 shrink-0" style={{ color: LEVEL_COLOR[verdict.level] }} />}
-                {verdict.summary}
-                {signature && <span className="mt-1 block font-mono text-[10.5px] text-red-400">⚑ StegoBolt SBV2 magic detected in the first bits — this object was produced by the Hide pipeline.</span>}
-              </p>
+              <div className="min-w-0 flex-1">
+                <p className="flex items-start gap-2 text-[12px] leading-relaxed text-slate-300">
+                  {verdict.level !== 'LOW' && <AlertTriangle size={13} className="mt-0.5 shrink-0" style={{ color: LEVEL_COLOR[verdict.level] }} />}
+                  <span>
+                    {verdict.summary}
+                    {signature?.confirmed && (
+                      <span className="mt-1 block font-mono text-[10.5px] text-red-400">
+                        ⚑ Valid SBV2 container framing in the first bits — this object was produced by the Hide pipeline.
+                      </span>
+                    )}
+                  </span>
+                </p>
+                <p className="mt-1.5 text-[10.5px] leading-relaxed text-slate-500">{verdict.basis}</p>
+              </div>
               <Gauge size={15} className="ml-auto hidden shrink-0 text-slate-700 sm:block" />
             </div>
 
@@ -358,6 +416,8 @@ export function ScanTab() {
                   </span>
                   <span className="w-[130px] shrink-0 text-right font-mono text-[10.5px] text-slate-300">{sig.value}</span>
                   {sig.label === 'SBV2 container signature' && <InfoTip text={TIPS.THREAT} width={300} />}
+                  {sig.label.startsWith('Sample-pair') && <InfoTip text={TIPS.SPA} width={300} />}
+                  {sig.label.startsWith('Value-pair') && <InfoTip text={TIPS.CHI} width={320} />}
                 </div>
               ))}
             </div>
@@ -366,8 +426,8 @@ export function ScanTab() {
               <div className="grid gap-3 md:grid-cols-2">
                 <div className="rounded-lg border border-hair bg-black/30 p-2.5">
                   <p className="mb-1.5 flex items-center justify-between text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">
-                    <span>Value-pair histogram <span className="normal-case text-slate-600">(stairs = embedding)</span></span>
-                    <span className="font-mono text-slate-400">p={fmtSci(stats.pValue)}</span>
+                    <span>Value-pair histogram <span className="normal-case text-slate-600">(flat = equalised pairs)</span></span>
+                    <span className="font-mono text-slate-400">p={fmtSci(stats.pValue)} <InfoTip text={TIPS.CHI} width={320} /></span>
                   </p>
                   <HistogramCanvas data={stats.histogram} />
                 </div>
@@ -390,11 +450,11 @@ export function ScanTab() {
                 <>
                   <div className="rounded-lg border border-hair bg-panel2/50 px-2 py-2">
                     <p className="text-[9px] font-bold uppercase tracking-widest text-slate-500">LSB ones ratio</p>
-                    <p className={`mt-1 font-mono text-[13px] font-semibold ${Math.abs(stats.onesRatio - 0.5) > 0.08 ? 'text-red-400' : 'text-emerald-400'}`}>{stats.onesRatio.toFixed(3)}</p>
+                    <p className="mt-1 font-mono text-[13px] font-semibold text-slate-200">{stats.onesRatio.toFixed(3)}</p>
                   </div>
                   <div className="rounded-lg border border-hair bg-panel2/50 px-2 py-2">
                     <p className="text-[9px] font-bold uppercase tracking-widest text-slate-500">Stream entropy</p>
-                    <p className={`mt-1 font-mono text-[13px] font-semibold ${stats.entropy < 0.97 ? 'text-amber-400' : 'text-emerald-400'}`}>{stats.entropy.toFixed(3)}</p>
+                    <p className="mt-1 font-mono text-[13px] font-semibold text-slate-200">{stats.entropy.toFixed(3)}</p>
                   </div>
                   <div className="rounded-lg border border-hair bg-panel2/50 px-2 py-2">
                     <p className="text-[9px] font-bold uppercase tracking-widest text-slate-500">Carrier bits</p>

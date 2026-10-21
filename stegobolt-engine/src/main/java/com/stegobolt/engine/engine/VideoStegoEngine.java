@@ -99,6 +99,34 @@ public final class VideoStegoEngine implements StegoEngine {
         return new SanitizeOutcome(cleaned, changed, randomized);
     }
 
+    /**
+     * The bit-plane sample stream used by the forensic scan: every byte of every
+     * uncompressed AVI frame payload, in chunk order. Returns {@code null} for
+     * MP4/MKV, whose payload layer is structural (a free box / Void element), so
+     * image-style LSB statistics must not be applied to compressed bitstreams.
+     */
+    public static byte[] frameSampleStream(byte[] cover) {
+        if (!isAvi(cover)) {
+            return null;
+        }
+        List<int[]> frames = aviFrameChunks(cover);
+        int total = 0;
+        for (int[] chunk : frames) {
+            total += chunk[1] - chunk[0];
+        }
+        if (total == 0) {
+            return null;
+        }
+        byte[] samples = new byte[total];
+        int at = 0;
+        for (int[] chunk : frames) {
+            int len = chunk[1] - chunk[0];
+            System.arraycopy(cover, chunk[0], samples, at, len);
+            at += len;
+        }
+        return samples;
+    }
+
     /* ------------------------------------------------------------------ */
     /* AVI — uncompressed frame LSB                                        */
     /* ------------------------------------------------------------------ */

@@ -44,10 +44,10 @@ const GUIDES: Guide[] = [
     title: 'How to Scan (Steganalysis)',
     steps: [
       'Open Forensic Scan and drop any image of unknown provenance.',
-      'The Threat Assessment Score blends four independent detectors: chi-square pair attack, LSB balance drift, bit-stream entropy and SBV2 signature search.',
-      'Study the visual histogram: natural covers show smooth, balanced bars; embedded data produces “stairs” of imbalanced value pairs.',
-      'The LSB plane heatmap renders the low bits as noise — banding, structured streaks or near-uniform fields are red flags.',
-      'Score ≥ 50 means “assume data is embedded”; sanitize before forwarding, or seize the file for offline investigation.',
+      'The scan first searches for a StegoBolt container signature (SBV2 in image LSB planes, SBV2-J on the engine path). Only a validated signature is reported as a confirmed container.',
+      'Without a signature the Threat Assessment Score weighs two independent detector families — sample-pair analysis (SPA) and chi-square value-pair equalisation. A high chi-square probability on its own never raises the level; both must agree before the score can leave LOW.',
+      'Study the visual histogram and LSB heatmap for context, not proof: natural covers can show imbalanced pairs and a busy LSB plane, which is why the verdict is never based on a single visual cue.',
+      'Read the verdict: confirmed container (CRITICAL) · strong statistical suspicion (HIGH, no signature found) · inconclusive irregularity (ELEVATED) · no meaningful evidence (LOW). Sanitize anything above LOW before forwarding, or hand it to offline investigation.',
     ],
   },
   {
@@ -95,7 +95,7 @@ const GLOSSARY: Term[] = [
   {
     term: 'Chi-Square Analysis',
     definition:
-      'Compares the population of value pairs (2i, 2i+1). Sequential LSB replacement equalizes pairs, so an unusually small chi-square statistic betrays embedding.',
+      'Compares the population of value pairs (2i, 2i+1) against the equalised model that sequential LSB replacement produces. StegoBolt uses it as one corroborating detector: a high chi-square probability alone never raises the threat level, and natural photos routinely score high without carrying any payload.',
   },
   { term: 'Ciphertext', definition: 'The encrypted payload produced by AES-256-GCM before embedding. Random-looking, authenticated, and useless without the key.' },
   { term: 'AES-256-GCM', definition: 'Authenticated military-grade encryption ensuring payload confidentiality and tamper resistance.' },

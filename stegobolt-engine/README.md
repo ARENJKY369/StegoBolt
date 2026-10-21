@@ -30,9 +30,48 @@ catch-all engine failure response.
 | --- | --- | --- |
 | `POST /api/v1/stego/hide` | `cover` (file), `payload` (file) **or** `payloadText`, `passphrase`, `textMode?` | stego media (`application/octet-stream`) + `X-StegoBolt-Report` JSON header |
 | `POST /api/v1/stego/extract` | `cover`, `passphrase`, `textMode?` | `ExtractReport` JSON (recovered text/base64) |
-| `POST /api/v1/stego/scan` | `cover`, `textMode?` | `ScanReport` JSON (chi-square, SPA, entropy, threat score, EXIF) |
+| `POST /api/v1/stego/scan` | `cover`, `textMode?` | `ScanReport` JSON (verdict + level/confidence/summary, chi-square, SPA, entropy, threat score, EXIF) |
 | `POST /api/v1/stego/clean` | `cover`, `randomizeLsb?`, `textMode?` | sanitized media + `X-StegoBolt-Report` JSON header |
 | `POST /api/v1/stego/capacity` | `cover`, `textMode?` | `CapacityReport` JSON |
+
+### `ScanReport` and how the verdict is derived
+
+`/scan` reports the raw numbers *and* the classification, so an operator can audit
+the decision instead of trusting a single score:
+
+```
+medium, carrierBytes,
+chiSquareStatistic, chiSquareProbability, spaEmbeddingRatio,
+lsbOnesRatio, lsbEntropy, windowedEntropy,
+containerSignatureFound, threatScore,
+indicators[], exifTags[],
+level, confidence, summary, analysisBasis, sampleBased, sampleSize, verdict
+```
+
+| `verdict` | `level` / `confidence` | Meaning |
+| --- | --- | --- |
+| `CONFIRMED_CONTAINER` | `CRITICAL` / `CONFIRMED` | A validated SBV2-J container was extracted (score ≥ 90). |
+| `DAMAGED_CONTAINER` | `HIGH` / `SUSPICIOUS` | `SB2J` magic present, header inconsistent; payload unreadable. |
+| `STRONG_STATISTICAL_SUSPICION` | `HIGH` / `SUSPICIOUS` | SPA **and** chi-square equalisation agree, no signature found. Capped at 88. |
+| `INCONCLUSIVE` | `ELEVATED` / `INCONCLUSIVE` | Weak statistical irregularity, or a structural medium with no embedding layer. |
+| `CLEAN` | `LOW` / `CLEAN` | No container and no meaningful anomaly. |
+
+- `chiSquareProbability` is `Q(df/2, χ²/2)`, i.e. the probability of an *even
+  better* pair fit — a high value is **not** evidence of embedding and is never
+  used alone. `SteganalysisEngine.Stats.chiEqualization()` applies
+  `z = (χ² − df)/√(2·df)`, a sample-size gate and a degrees-of-freedom gate
+  before chi-square contributes to the level.
+- `ELEVATED`/`HIGH` require SPA ≥ 0.6 **and** corrobating equalisation, so a
+  single dominating detector cannot raise the level. Channel imbalance
+  (`lsbOnesRatio` ≈ 0.6), entropy ≈ 1.0 and long-run anomalies appear in
+  `indicators` as supporting evidence only.
+- `sampleBased` is `false` for PDF/DOCX, text/code, FLAC, MP4/MKV and PCAP/PCAPNG
+  captures: those carriers are judged structurally (hidden OPC part, zero-width
+  run, PADDING block, `free`/`Void` element, IPv4 ID LSBs) and the image-style
+  numbers must be ignored. Such carriers report score 8, `LOW`, `INCONCLUSIVE`
+  unless a signature is found.
+- The summary always states whether a container was found; weak evidence is
+  worded as "inconclusive", never as an embedded message.
 
 CORS allows local Next.js origins plus the supported Vercel and Arena preview origins; the engine does not use CORS as an authentication boundary.
 
