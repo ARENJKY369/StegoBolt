@@ -1,5 +1,6 @@
 package com.stegobolt.engine;
 
+import org.hamcrest.Matchers;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -80,7 +81,33 @@ class StegoControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.medium").value("Image"))
                 .andExpect(jsonPath("$.threatScore").isNumber())
-                .andExpect(jsonPath("$.indicators").isArray());
+                .andExpect(jsonPath("$.indicators").isArray())
+                .andExpect(jsonPath("$.sampleBased").value(true))
+                .andExpect(jsonPath("$.containerSignatureFound").value(false))
+                // A clean cover must never be reported as elevated or embedded.
+                .andExpect(jsonPath("$.level").value("LOW"))
+                .andExpect(jsonPath("$.verdict").value("CLEAN"))
+                .andExpect(jsonPath("$.summary").value(Matchers.containsString("No StegoBolt container detected")))
+                .andExpect(jsonPath("$.analysisBasis").isNotEmpty());
+    }
+
+    @Test
+    void scanOfHiddenCarrierConfirmsTheContainer() throws Exception {
+        MvcResult hidden = mvc.perform(multipart("/api/v1/stego/hide")
+                        .file(cover())
+                        .param("payloadText", "forensic payload")
+                        .param("passphrase", "unit-test-pass"))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        MockMultipartFile stegoPart = new MockMultipartFile("cover", "stego.png", "image/png",
+                hidden.getResponse().getContentAsByteArray());
+        mvc.perform(multipart("/api/v1/stego/scan").file(stegoPart))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.containerSignatureFound").value(true))
+                .andExpect(jsonPath("$.level").value("CRITICAL"))
+                .andExpect(jsonPath("$.confidence").value("CONFIRMED"))
+                .andExpect(jsonPath("$.verdict").value("CONFIRMED_CONTAINER"));
     }
 
     @Test

@@ -95,6 +95,23 @@ public final class NetworkStegoEngine implements StegoEngine {
         return new SanitizeOutcome(out, changed, slots.size());
     }
 
+    /**
+     * The cover-channel bit stream for the forensic scan: the low byte of the
+     * IPv4 Identification field for every captured IPv4 packet (one embeddable
+     * bit each, in capture order). Empty when the capture has no IPv4 packets.
+     */
+    public static byte[] ipIdSamples(byte[] cover) {
+        if (cover == null || !Sniffer.isPcap(cover)) {
+            return new byte[0];
+        }
+        List<int[]> slots = ipIdSlots(cover);
+        byte[] samples = new byte[slots.size()];
+        for (int i = 0; i < slots.size(); i++) {
+            samples[i] = cover[slots.get(i)[0]];
+        }
+        return samples;
+    }
+
     /* ------------------------------------------------------------------ */
     /* capture parsing                                                     */
     /* ------------------------------------------------------------------ */

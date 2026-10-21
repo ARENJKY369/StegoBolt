@@ -196,7 +196,7 @@ function UnderTheHood() {
           <TechSpec
             icon={Activity}
             title="Statistical Chi-Square & Sample Pair Analysis (SPA) steganalysis"
-            body="Pure-Java forensic detectors: Westfeld chi-square value-pair attack, Dumitrescu sample-pair analysis for embedding-ratio estimation, LSB balance and windowed entropy — blended into a 0–100 Threat Assessment Score."
+            body="Pure-Java forensic detectors: Westfeld chi-square value-pair attack, Dumitrescu sample-pair analysis for embedding-ratio estimation, LSB balance and windowed entropy. Only a validated SBV2/SBV2-J signature is reported as a confirmed container; without one, two independent detectors must agree before the level leaves LOW, so clean and recompressed media are not mislabelled."
           />
           <TechSpec
             icon={Boxes}

@@ -67,6 +67,32 @@ public final class DocumentStegoEngine implements StegoEngine {
         return new SanitizeOutcome(cleaned, removed, removed);
     }
 
+    /**
+     * Structural probe for the forensic scan: true when a DOCX package carries
+     * the hidden {@code word/stegobolt.bin} part (or a PDF carries the StegoBolt
+     * incremental-update marker) even if extraction cannot complete.
+     */
+    public static boolean hasHiddenLayer(byte[] cover) {
+        if (cover == null) {
+            return false;
+        }
+        if (isZip(cover)) {
+            Map<String, byte[]> parts = readZip(cover);
+            try {
+                return parts.containsKey(DOCX_PART);
+            } finally {
+                for (byte[] part : parts.values()) {
+                    MemoryHygiene.wipe(part);
+                }
+            }
+        }
+        if (isPdf(cover)) {
+            String text = new String(cover, StandardCharsets.ISO_8859_1);
+            return text.contains(PDF_MARK) || text.contains(PDF_BEGIN);
+        }
+        return false;
+    }
+
     /* ------------------------------------------------------------------ */
     /* DOCX — hidden structural part inside the OPC package                */
     /* ------------------------------------------------------------------ */

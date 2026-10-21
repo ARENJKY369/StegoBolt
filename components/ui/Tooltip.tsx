@@ -78,10 +78,11 @@ export const TIPS = {
   INDEXEDDB:
     'IndexedDB (Dexie): The browser\u2019s local database. Your vault history lives here, on this device — never on a server.',
   FSA: 'File System Access API: Grants StegoBolt a handle to a folder you pick on your own disk. Directories are only written when you enable disk backup.',
-  CHI: 'Chi-Square Attack: Tests whether value pairs (2i, 2i+1) keep the binomial balance of natural images. Sequential LSB embedding skews it.',
+  CHI: 'Chi-square value-pair test: compares the populations of value pairs (2i, 2i+1). Sequential LSB replacement equalises them, so the reported probability rises with embedding — an imbalanced photo simply means the cover structure survived.',
+  SPA: 'Sample Pair Analysis (SPA): estimates the LSB replacement rate from adjacent sample pairs. It is an estimate, not proof, and is only meaningful when the value-pair test agrees.',
   SSIM: 'SSIM (Structural Similarity Index): Perceptual similarity score between cover and stego. 1.0 = visually identical structures.',
   THREAT:
-    'Threat Assessment Score (0–100): Blended evidence from chi-square pair tests, LSB balance, entropy and container-signature detection.',
+    'Threat Assessment Score (0–100): two independent detector families (value-pair equalisation and SPA) plus supporting signals. A single high detector stays LOW — only a validated SBV2 container confirms a payload.',
   PBKDF2:
     'PBKDF2-SHA256 with 100,000 iterations + a random salt stretches your master passphrase into the AES-256 key held only in RAM.',
   AUTOSAVE:

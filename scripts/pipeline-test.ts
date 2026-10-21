@@ -203,21 +203,207 @@ async function main() {
     console.log('worker noise contract ok');
   }
 
-  // ---- 5. steganalysis can flag an SBV2 carrier, passes clean images ----
-  const { analyzeLsbPlane, detectSbv2Magic, threatAssessment, measureQuality, renderLsbPlane } = await import('../lib/analysis.ts');
-  const sStego = analyzeLsbPlane(carrier, W, H);
-  assert.ok(detectSbv2Magic(carrier), 'scanner must find SBV2 magic in the stego object');
-  const vStego = threatAssessment(sStego, true);
-  assert.ok(vStego.score >= 24 && vStego.level !== 'LOW', `stego threat must be elevated, got ${vStego.score}`);
-  const sClean = analyzeLsbPlane(px, W, H);
-  assert.ok(!detectSbv2Magic(px), 'clean image must not carry the magic');
-  const vClean = threatAssessment(sClean, false);
-  assert.ok(vClean.score < 60, `clean-image threat should not be critical, got ${vClean.score}`);
+  // ---- 5. forensic-scan calibration & false-positive regressions ----------
+  // These fixtures model the reported false positive (a clean photograph with
+  // "chi-square evidence 100.0%" / "ELEVATED") and prove that only a validated
+  // SBV2 container may be described as confirmed.
+  const { analyzeLsbPlane, detectSbv2Magic, inspectSbv2Container, threatAssessment, assessEngineScan, measureQuality, renderLsbPlane } = await import('../lib/analysis.ts');
+  const F = await import('./scan-fixtures.ts');
+
+  const FW = 320;
+  const FH = 240;
+
+  const FORBIDDEN_CLAIMS = [
+    /contains an embedded message/i,
+    /embedded message is present/i,
+    /likely embedding/i,
+    /likely a recompressed or lightly modified/i,
+    /assume data is embedded/i,
+    /data is embedded/i,
+  ];
+  const assertCautiousWording = (summary: string, where: string) => {
+    for (const re of FORBIDDEN_CLAIMS) {
+      assert.ok(!re.test(summary), `${where}: careless wording in summary — "${summary}"`);
+    }
+  };
+
+  // 5a. clean natural-looking photograph -----------------------------------
+  const cleanPhoto = F.cleanNaturalPhoto(FW, FH);
+  const sCleanPhoto = analyzeLsbPlane(cleanPhoto, FW, FH);
+  const vCleanPhoto = threatAssessment(sCleanPhoto, inspectSbv2Container(cleanPhoto));
+  assert.equal(vCleanPhoto.level, 'LOW', `clean photo must be LOW, got ${vCleanPhoto.level} (${vCleanPhoto.score})`);
+  assert.ok(vCleanPhoto.score < 25, `clean photo score must stay below ELEVATED, got ${vCleanPhoto.score}`);
+  assert.equal(vCleanPhoto.confidence, 'CLEAN');
+  assert.match(vCleanPhoto.summary, /No StegoBolt container detected/);
+  assert.match(vCleanPhoto.summary, /no direct evidence of an embedded message/i);
+  assert.ok(!/confirmed/i.test(vCleanPhoto.summary), 'clean photo must not be called confirmed');
+  assert.ok(!detectSbv2Magic(cleanPhoto), 'clean photo must carry no SBV2 magic');
+  assertCautiousWording(vCleanPhoto.summary, 'clean photo');
+  // the old inverted mapping reported this as ~100 % chi-square evidence
+  assert.ok(sCleanPhoto.chiEqualization < 0.2, `clean photo equalisation evidence must stay low, got ${sCleanPhoto.chiEqualization}`);
+  assert.ok(sCleanPhoto.pValue < 0.5, `clean photo pairs are imbalanced, p must be small, got ${sCleanPhoto.pValue}`);
+  console.log(`clean-photo regression ok · ${vCleanPhoto.score}/100 ${vCleanPhoto.level}/${vCleanPhoto.confidence} · pair p=${sCleanPhoto.pValue.toExponential(2)} · equalisation ${(sCleanPhoto.chiEqualization * 100).toFixed(1)}%`);
+
+  // 5b. clean recompressed JPEG -------------------------------------------
+  const jpeg = F.recompressedJpeg(FW, FH);
+  const sJpeg = analyzeLsbPlane(jpeg, FW, FH);
+  const vJpeg = threatAssessment(sJpeg, inspectSbv2Container(jpeg));
+  assert.equal(vJpeg.level, 'LOW', `recompressed JPEG must be LOW, got ${vJpeg.level} (${vJpeg.score})`);
+  assert.ok(vJpeg.score < 25, `recompressed JPEG score must stay below ELEVATED, got ${vJpeg.score}`);
+  assertCautiousWording(vJpeg.summary, 'recompressed JPEG');
+  assert.ok(!detectSbv2Magic(jpeg), 'recompressed JPEG must carry no SBV2 magic');
+  console.log(`recompressed-jpeg regression ok · ${vJpeg.score}/100 ${vJpeg.level}/${vJpeg.confidence}`);
+
+  // 5c. clean synthetic image with natural channel imbalance --------------
+  // Mirrors the reported carrier: LSB ones ratio ≈ 0.597 while SPA alone may
+  // look "high". A single detector must never lift the verdict.
+  const imbalanced = F.cleanChannelImbalance(FW, FH);
+  const sImbalanced = analyzeLsbPlane(imbalanced, FW, FH);
+  const vImbalanced = threatAssessment(sImbalanced, inspectSbv2Container(imbalanced));
+  assert.ok(sImbalanced.onesRatio > 0.55 && sImbalanced.onesRatio < 0.65, `fixture must reproduce the reported ones ratio, got ${sImbalanced.onesRatio}`);
+  assert.equal(vImbalanced.level, 'LOW', `channel-imbalanced clean image must be LOW, got ${vImbalanced.level} (${vImbalanced.score})`);
+  assert.equal(vImbalanced.confidence, 'CLEAN');
+  assert.ok(sImbalanced.chiEqualization < 0.2, 'imbalanced pairs must not read as equalisation evidence');
+  assertCautiousWording(vImbalanced.summary, 'channel imbalance');
+  const syntheticBias = F.syntheticChannelBias(FW, FH);
+  const vSynthetic = threatAssessment(analyzeLsbPlane(syntheticBias, FW, FH), inspectSbv2Container(syntheticBias));
+  assert.equal(vSynthetic.level, 'LOW', `clean synthetic image must be LOW, got ${vSynthetic.level} (${vSynthetic.score})`);
+  assertCautiousWording(vSynthetic.summary, 'synthetic channel bias');
+  console.log(`channel-bias regression ok · ones ${sImbalanced.onesRatio.toFixed(3)} · SPA ${(sImbalanced.spaEmbeddingRatio * 100).toFixed(1)}% (single detector, capped) · ${vImbalanced.score}/100 ${vImbalanced.level}`);
+
+  // 5d. known local SBV2 stego carrier must still be detected -------------
+  const stegoPhotos = F.sbv2Stego(cleanPhoto, FW, FH, 96);
+  const inspStego = inspectSbv2Container(stegoPhotos);
+  assert.ok(inspStego.confirmed, `known SBV2 carrier must validate its header (${inspStego.status})`);
+  const sStego = analyzeLsbPlane(stegoPhotos, FW, FH);
+  const vStego = threatAssessment(sStego, inspStego);
+  assert.equal(vStego.level, 'CRITICAL', `SBV2 carrier must be CRITICAL, got ${vStego.level} (${vStego.score})`);
+  assert.equal(vStego.confidence, 'CONFIRMED');
+  assert.ok(vStego.score >= 90, `SBV2 carrier score must stay high, got ${vStego.score}`);
+  assert.match(vStego.summary, /Confirmed StegoBolt container detected/);
+  assert.ok(detectSbv2Magic(stegoPhotos), 'boolean magic probe must still work');
+  // ... and the boolean compatibility path still confirms a carrier.
+  assert.equal(threatAssessment(sStego, true).level, 'CRITICAL', 'boolean signature path must confirm');
+  console.log(`sbv2-stego regression ok · ${vStego.score}/100 ${vStego.level}/${vStego.confidence} · ${inspStego.detail}`);
+
+  // 5e. full-plane LSB replacement without SBV2 framing -------------------
+  // Strong multi-signal suspicion: both detector families agree, yet the
+  // wording must stay "suspicion" because no container signature exists.
+  const fullPlane = F.fullPlaneLsbNoise(cleanPhoto);
+  const sFull = analyzeLsbPlane(fullPlane, FW, FH);
+  const vFull = threatAssessment(sFull, inspectSbv2Container(fullPlane));
+  assert.equal(vFull.level, 'HIGH', `full-plane random LSB must reach HIGH, got ${vFull.level} (${vFull.score})`);
+  assert.equal(vFull.confidence, 'SUSPICIOUS');
+  assert.match(vFull.summary, /No StegoBolt container signature was found/);
+  assert.match(vFull.summary, /statistical suspicion/);
+  assert.ok(!/Confirmed StegoBolt container/i.test(vFull.summary), 'unsignatured carrier must not be called confirmed');
+  assertCautiousWording(vFull.summary, 'full-plane LSB replacement');
+  assert.ok(sFull.chiEqualization > 0.4 && sFull.spaEvidence > 0.4, 'both detector families must agree on full-plane embedding');
+  console.log(`statistical-suspicion regression ok · ${vFull.score}/100 ${vFull.level}/${vFull.confidence} · equalisation ${(sFull.chiEqualization * 100).toFixed(0)}% · SPA ${(sFull.spaEvidence * 100).toFixed(0)}%`);
+
+  // 5f. wrong / corrupted signatures --------------------------------------
+  const corrupted = F.corruptedSbv2(stegoPhotos);
+  const inspCorrupt = inspectSbv2Container(corrupted);
+  assert.ok(inspCorrupt.found && !inspCorrupt.confirmed, 'corrupted header must be found but not confirmed');
+  assert.equal(inspCorrupt.status, 'bad-version');
+  const vCorrupt = threatAssessment(analyzeLsbPlane(corrupted, FW, FH), inspCorrupt);
+  assert.equal(vCorrupt.level, 'HIGH', `damaged framing must be HIGH, got ${vCorrupt.level} (${vCorrupt.score})`);
+  assert.equal(vCorrupt.confidence, 'SUSPICIOUS');
+  assert.match(vCorrupt.summary, /Damaged StegoBolt container framing/);
+  assert.ok(!/Confirmed StegoBolt container detected/i.test(vCorrupt.summary), 'damaged framing must not be reported as confirmed');
+  assertCautiousWording(vCorrupt.summary, 'corrupted signature');
+  // A clean image whose first bits spell "SBV3" is not an SBV2 container.
+  const wrongMagic = cleanPhoto.slice();
+  const sbv3 = [0x53, 0x42, 0x56, 0x33];
+  for (let b = 0; b < 32; b++) {
+    const bit = (sbv3[b >> 3] >> (7 - (b & 7))) & 1;
+    const p = Math.floor(b / 3);
+    wrongMagic[p * 4 + (b % 3)] = (wrongMagic[p * 4 + (b % 3)] & 0xfe) | bit;
+  }
+  const inspWrong = inspectSbv2Container(wrongMagic);
+  assert.equal(inspWrong.status, 'absent', `wrong magic must stay absent, got ${inspWrong.status}`);
+  assert.equal(threatAssessment(analyzeLsbPlane(wrongMagic, FW, FH), inspWrong).confidence, 'CLEAN');
+  console.log('signature-regression ok · corrupted header → damaged framing (HIGH/SUSPICIOUS) · wrong magic → absent');
+
+  // 5g. tiny carriers cannot produce confident statistics ----------------
+  const tiny = F.cleanNaturalPhoto(16, 16);
+  const vTiny = threatAssessment(analyzeLsbPlane(tiny, 16, 16), inspectSbv2Container(tiny));
+  assert.equal(vTiny.level, 'LOW');
+  assert.equal(vTiny.confidence, 'INCONCLUSIVE');
+  assert.match(vTiny.summary, /too small for reliable statistics/);
+  assertCautiousWording(vTiny.summary, 'tiny carrier');
+  console.log(`small-sample regression ok · ${vTiny.score}/100 ${vTiny.level}/${vTiny.confidence}`);
+
+  // 5h. engine-report normalisation across the six medium families --------
+  // Every family is exercised through the same code path the UI uses, so a
+  // non-image carrier can never borrow image LSB wording or confidence.
+  const cleanReport = (medium: string, sampleBased: boolean) => ({
+    medium,
+    threatScore: 8,
+    containerSignatureFound: false,
+    chiSquareProbability: 4.7e-11,
+    spaEmbeddingRatio: 0,
+    lsbOnesRatio: 0.5,
+    lsbEntropy: 0.99,
+    sampleBased,
+    sampleSize: sampleBased ? 230400 : 0,
+    indicators: ['No statistical evidence of steganographic embedding'],
+  });
+  const confirmedReport = (medium: string) => ({
+    ...cleanReport(medium, false),
+    threatScore: 96,
+    containerSignatureFound: true,
+    level: 'CRITICAL',
+    confidence: 'CONFIRMED',
+    summary: 'Confirmed StegoBolt container detected: a valid SBV2-J container header is present in this carrier.',
+    analysisBasis: `${medium} structural SBV2-J container`,
+  });
+  const families: [string, boolean][] = [
+    ['Image', true],
+    ['Audio', true],
+    ['Audio', false], // FLAC padding layer — structural only
+    ['Video', false],
+    ['Document', false],
+    ['Text', false],
+    ['Network', false],
+  ];
+  for (const [medium, sampleBased] of families) {
+    const clean = assessEngineScan(cleanReport(medium, sampleBased));
+    assert.equal(clean.level, 'LOW', `${medium}: clean carrier must be LOW, got ${clean.level} (${clean.score})`);
+    assert.notEqual(clean.confidence, 'CONFIRMED', `${medium}: clean carrier must not be confirmed`);
+    assertCautiousWording(clean.summary, `${medium} clean`);
+    assert.match(clean.summary, /No StegoBolt container/i, `${medium}: summary must state the container is absent`);
+    const stego = assessEngineScan(confirmedReport(medium));
+    assert.equal(stego.level, 'CRITICAL', `${medium}: signed carrier must be CRITICAL`);
+    assert.equal(stego.confidence, 'CONFIRMED');
+    assert.match(stego.summary, /Confirmed StegoBolt container detected/);
+  }
+  // Structural-only media must ignore image LSB statistics entirely.
+  const structuralNoise = assessEngineScan({
+    ...cleanReport('Document', false),
+    chiSquareProbability: 1,
+    spaEmbeddingRatio: 0.95,
+    lsbOnesRatio: 0.5,
+    threatScore: 0,
+  });
+  assert.equal(structuralNoise.level, 'LOW', 'structural media must not be graded by LSB statistics');
+  assert.notEqual(structuralNoise.confidence, 'CONFIRMED');
+  // Old engines without calibrated fields still get the fallback classification.
+  const legacyClean = assessEngineScan({ ...cleanReport('Image', true) });
+  assert.equal(legacyClean.level, 'LOW', 'legacy clean engine report must be LOW');
+  const legacySigned = assessEngineScan({ ...cleanReport('Network', false), containerSignatureFound: true, threatScore: 60 });
+  assert.equal(legacySigned.level, 'CRITICAL', 'legacy signed report must confirm');
+  assert.match(legacySigned.summary, /Confirmed StegoBolt container detected/);
+  console.log('engine-report regression ok · Image/Audio/Video/Document/Text/Network clean + confirmed paths');
+
+  // ---- quality metrics stay intact --------------------------------------
   const q = measureQuality(px, carrier, 1056, W * H * 3);
   assert.ok(q.psnrDb > 45 && q.ssimApprox > 0.999, `embedding must stay imperceptible (PSNR ${q.psnrDb}, SSIM ${q.ssimApprox})`);
   const plane = renderLsbPlane(carrier, W, H);
   assert.equal(plane.length, W * H * 4);
-  console.log(`analysis ok · stego threat ${vStego.score} (${vStego.level}) · clean ${vClean.score} · embed PSNR ${q.psnrDb.toFixed(1)} dB · SSIM ${q.ssimApprox.toFixed(5)}`);
+  // the legacy random-pixel carrier is still a valid SBV2 object
+  assert.ok(detectSbv2Magic(carrier), 'legacy carrier magic must be detected');
+  console.log(`quality metrics ok · PSNR ${q.psnrDb.toFixed(1)} dB · SSIM ${q.ssimApprox.toFixed(5)}`);
 
   console.log('\nALL PIPELINE TESTS PASSED ✔');
 }

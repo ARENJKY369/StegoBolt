@@ -202,36 +202,162 @@ public final class StegoService {
     public WorkResult scan(byte[] cover, String coverName, String textMode) {
         WorkResult work = new WorkResult();
         boolean handedOff = false;
-        byte[] samples = null;
+        byte[] sampleStream = null;   // stream used by the statistical detectors
+        byte[] probeStream = null;    // bit-plane stream used by the signature probe
         byte[] embedded = null;
         try {
             Medium medium = Sniffer.sniff(cover, coverName);
             StegoEngine engine = engineFor(medium, textMode);
-            samples = sampleStream(medium, cover);
-            SteganalysisEngine.Stats stats = SteganalysisEngine.analyze(samples);
 
-            embedded = engine.extract(cover);
-            boolean signature = embedded != null;
-            int threat = SteganalysisEngine.threatScore(stats, signature);
+            boolean sampleBased = false;
+            String mediumNoun = medium.label().toLowerCase(java.util.Locale.ROOT);
+            String basis;
+            long structuralSamples = 0;
 
+            boolean pixelDecodeFailed = false;
+            switch (medium) {
+                case IMAGE -> {
+                    try {
+                        sampleStream = ImageStegoEngine.embeddableSamples(cover);
+                    } catch (RuntimeException e) {
+                        // Some variants (e.g. WebP without a decoder plugin) cannot be
+                        // rasterised by ImageIO. Fall back to a structural report
+                        // instead of failing the whole scan.
+                        sampleStream = null;
+                        pixelDecodeFailed = true;
+                    }
+                    if (sampleStream != null) {
+                        probeStream = sampleStream;
+                        sampleBased = true;
+                        basis = "Pixel LSB plane · R/G/B channels · " + (sampleStream.length / 3)
+                                + " pixels (" + sampleStream.length + " bit slots)";
+                        structuralSamples = sampleStream.length;
+                    } else {
+                        basis = "Image container structure only (this image variant is not decodable by the "
+                                + "built-in rasterizer, so pixel LSB statistics are unavailable)";
+                    }
+                }
+                case AUDIO -> {
+                    if (AudioStegoEngine.isFlac(cover)) {
+                        basis = "FLAC metadata padding layer (structural inspection — compressed frames are not LSB-analysed)";
+                    } else {
+                        sampleStream = AudioStegoEngine.sampleStream(cover);
+                        probeStream = sampleStream;
+                        sampleBased = true;
+                        basis = "PCM sample LSB plane · " + sampleStream.length + " sample bytes";
+                        structuralSamples = sampleStream.length;
+                    }
+                }
+                case VIDEO -> {
+                    sampleStream = VideoStegoEngine.frameSampleStream(cover);
+                    if (sampleStream == null) {
+                        basis = "MP4/MKV container padding (structural inspection — compressed video frames are not LSB-analysed)";
+                    } else {
+                        probeStream = sampleStream;
+                        sampleBased = true;
+                        basis = "AVI uncompressed frame LSB plane · " + sampleStream.length + " frame bytes";
+                        structuralSamples = sampleStream.length;
+                    }
+                }
+                case DOCUMENT -> basis = "PDF/DOCX hidden structural stream (structural inspection — file bytes are not LSB-analysed)";
+                case TEXT -> basis = "Zero-width Unicode / trailing-whitespace covert layer (structural inspection — text bytes are not LSB-analysed)";
+                case NETWORK -> {
+                    probeStream = NetworkStegoEngine.ipIdSamples(cover);
+                    structuralSamples = probeStream.length;
+                    basis = "IPv4 Identification header LSBs · " + probeStream.length
+                            + " packets (header bit plane only — capture bytes are not LSB-analysed)";
+                }
+                default -> basis = "Structural inspection";
+            }
+
+            // ---- statistical detectors (only where they are meaningful) ----
+            SteganalysisEngine.Stats stats;
+            if (sampleStream != null) {
+                stats = SteganalysisEngine.analyze(sampleStream);
+            } else if (medium == Medium.NETWORK) {
+                stats = SteganalysisEngine.Stats.structural(probeStream == null ? 0 : probeStream.length,
+                        SteganalysisEngine.lsbOnesRatio(probeStream));
+            } else {
+                stats = SteganalysisEngine.Stats.structural(0);
+            }
+
+            // ---- container signature ----------------------------------------
+            try {
+                embedded = engine.extract(cover);
+            } catch (RuntimeException e) {
+                // An unreadable container layer must never abort the report; the
+                // verdict then rests on the structural evidence that remains.
+                embedded = null;
+            }
+            SteganalysisEngine.SignatureState signature;
+            if (embedded != null) {
+                signature = SteganalysisEngine.SignatureState.CONFIRMED;
+            } else if (probeStream != null) {
+                signature = SteganalysisEngine.probeBitPlane(probeStream);
+            } else if (medium == Medium.DOCUMENT && DocumentStegoEngine.hasHiddenLayer(cover)) {
+                signature = SteganalysisEngine.SignatureState.MALFORMED;
+            } else if (medium == Medium.TEXT) {
+                TextStegoEngine.TextInspection text = TextStegoEngine.inspect(cover);
+                signature = text.sb2jMarkerPresent()
+                        ? SteganalysisEngine.SignatureState.MALFORMED
+                        : SteganalysisEngine.SignatureState.ABSENT;
+            } else {
+                signature = SteganalysisEngine.probeStructuralBytes(cover);
+            }
+
+            SteganalysisEngine.Verdict verdict =
+                    SteganalysisEngine.assess(stats, signature, mediumNoun, basis);
+
+            // ---- medium-appropriate indicators -------------------------------
             List<String> indicators = new ArrayList<>();
-            if (stats.chiSquareProbability() > 0.95) {
-                indicators.add("Value pairs strongly equalized — chi-square embedding probability "
-                        + String.format("%.2f", stats.chiSquareProbability()));
+            switch (signature) {
+                case CONFIRMED -> indicators.add(
+                        "SBV2-J container signature found and validated in the " + layerDescription(medium) + ".");
+                case MALFORMED -> indicators.add(
+                        "SBV2-J framing detected in the " + layerDescription(medium)
+                                + " but the header is inconsistent — the carrier was probably modified or truncated.");
+                case ABSENT -> {
+                    // fall through to the per-medium evidence below
+                }
             }
-            if (stats.spaEmbeddingRatio() > 0.25) {
-                indicators.add("Sample-pair analysis estimates an embedding ratio of "
-                        + String.format("%.2f", stats.spaEmbeddingRatio()));
+            if (signature != SteganalysisEngine.SignatureState.CONFIRMED) {
+                switch (medium) {
+                    case IMAGE, AUDIO -> {
+                        if (sampleBased) {
+                            addStatisticalIndicators(indicators, stats);
+                        } else {
+                            indicators.add("No SB2J marker in the FLAC padding metadata blocks.");
+                        }
+                    }
+                    case VIDEO -> {
+                        if (sampleBased) {
+                            addStatisticalIndicators(indicators, stats);
+                        } else {
+                            indicators.add("No SB2J marker in MP4 free boxes or MKV Void elements.");
+                        }
+                    }
+                    case DOCUMENT -> indicators.add(
+                            "No hidden SB2J stream in the PDF incremental-update area or the DOCX package parts.");
+                    case TEXT -> {
+                        TextStegoEngine.TextInspection text = TextStegoEngine.inspect(cover);
+                        indicators.add("Zero-width characters: " + text.zeroWidthChars()
+                                + " · trailing-whitespace lines: " + text.trailingWhitespaceLines()
+                                + " · SB2J framing: " + (text.sb2jMarkerPresent() ? "present" : "absent") + ".");
+                        if (text.zeroWidthChars() == 0 && text.trailingWhitespaceLines() == 0) {
+                            indicators.add("No covert-text layer detected — the document is plain text/code.");
+                        }
+                    }
+                    case NETWORK -> indicators.add("IPv4 ID header LSB ones ratio "
+                            + String.format("%.3f", stats.lsbOnesRatio()) + " over "
+                            + structuralSamples + " packets · no SB2J framing in the header bit plane.");
+                }
             }
-            if (Math.abs(0.5 - stats.lsbOnesRatio()) > 0.1) {
-                indicators.add("LSB plane imbalance — ones ratio "
-                        + String.format("%.2f", stats.lsbOnesRatio()));
+            if (verdict.level() == SteganalysisEngine.Level.ELEVATED) {
+                indicators.add("Statistical irregularities are inconclusive — no StegoBolt container was found.");
             }
-            if (signature) {
-                indicators.add("SBV2-J container signature found in the embedding layer");
-            }
-            if (indicators.isEmpty()) {
-                indicators.add("No statistical evidence of steganographic embedding");
+            if (pixelDecodeFailed) {
+                indicators.add("Pixel LSB statistics are unavailable for this image variant; "
+                        + "no StegoBolt container signature was found in the container structure.");
             }
 
             List<String> exifTags = medium == Medium.IMAGE ? ExifSanitizer.listTags(cover) : List.of();
@@ -244,19 +370,72 @@ public final class StegoService {
                     stats.lsbOnesRatio(),
                     stats.lsbEntropy(),
                     stats.windowedEntropy(),
-                    signature,
-                    threat,
+                    signature == SteganalysisEngine.SignatureState.CONFIRMED,
+                    verdict.score(),
                     indicators,
-                    exifTags);
-            work.track(cover, samples, embedded);
+                    exifTags,
+                    verdict.level().name(),
+                    verdict.confidence().name(),
+                    verdict.summary(),
+                    verdict.basis(),
+                    stats.sampleBased(),
+                    stats.sampleBased() ? stats.samples() : structuralSamples,
+                    verdict.code());
+            work.track(cover, sampleStream, probeStream == sampleStream ? null : probeStream, embedded);
             handedOff = true;
             return work;
         } catch (RuntimeException e) {
             if (!handedOff) {
-                work.track(cover, samples, embedded);
+                work.track(cover, sampleStream, probeStream == sampleStream ? null : probeStream, embedded);
                 work.close();
             }
             throw e;
+        }
+    }
+
+    /** Human-readable name of the layer a container would occupy. */
+    private static String layerDescription(Medium medium) {
+        return switch (medium) {
+            case IMAGE -> "pixel LSB plane";
+            case AUDIO -> "audio sample/padding layer";
+            case VIDEO -> "video frame or padding layer";
+            case DOCUMENT -> "hidden document stream";
+            case TEXT -> "covert text layer (zero-width/whitespace)";
+            case NETWORK -> "IPv4 ID header bit plane";
+        };
+    }
+
+    /**
+     * Medium-appropriate statistical indicators. A single detector is always
+     * described as an isolated, inconclusive observation — never as embedding.
+     */
+    private static void addStatisticalIndicators(List<String> indicators, SteganalysisEngine.Stats stats) {
+        double eq = stats.chiEqualization();
+        double spa = stats.spaEvidence();
+        if (eq >= 0.55 && spa >= 0.55) {
+            indicators.add("Two independent detectors agree: value pairs are equalised (p="
+                    + String.format("%.2e", stats.chiSquareProbability())
+                    + ") and sample-pair analysis estimates an embedding rate of "
+                    + String.format("%.2f", stats.spaEmbeddingRatio()) + ".");
+        } else {
+            if (eq >= 0.3) {
+                indicators.add("Value pairs are partially equalised (p="
+                        + String.format("%.2e", stats.chiSquareProbability())
+                        + ") — a single indicator, inconclusive on its own.");
+            }
+            if (spa >= 0.3) {
+                indicators.add("Sample-pair analysis estimates an embedding rate of "
+                        + String.format("%.2f", stats.spaEmbeddingRatio())
+                        + " — a single indicator, uncorroborated.");
+            }
+        }
+        if (Math.abs(stats.lsbOnesRatio() - 0.5) > 0.06) {
+            indicators.add("LSB ones ratio " + String.format("%.3f", stats.lsbOnesRatio())
+                    + " deviates from 0.500 — normal for textured, quantised or saturated media and not "
+                    + "embedding evidence on its own.");
+        }
+        if (indicators.isEmpty()) {
+            indicators.add("No statistical evidence of steganographic embedding.");
         }
     }
 
