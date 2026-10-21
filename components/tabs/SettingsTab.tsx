@@ -184,10 +184,10 @@ export function SettingsTab({ onReplayTour, onOpenPrivacy }: { onReplayTour: () 
       <section className="card space-y-3 p-5">
         <h3 className="card-title">Java Engine (optional backend)</h3>
         <p className="text-[11.5px] leading-relaxed text-slate-500">
-          StegoBolt can delegate Hide &amp; Extract to the local Java 17 engine at{' '}
-          <span className="font-mono text-slate-400">http://localhost:8080</span> — same algorithms, but running outside the
-          browser with zero-disk RAM-only processing. Local mode keeps everything in this tab (recommended unless you are
-          operating the engine).
+          StegoBolt can delegate <span className="text-slate-300">Hide, Extract, Scan and Clean</span> for images, WAV/FLAC audio,
+          MP4/MKV/AVI video, PDF/DOCX documents, text/code and PCAP/PCAPNG captures to the Java 17 engine at{' '}
+          <span className="font-mono text-slate-400">http://localhost:8080</span>. Processing stays in volatile RAM — no engine
+          upload, stego file or recovered payload is written to disk. Local mode remains the browser-only path for images.
         </p>
         <div className="flex gap-2">
           {(['local', 'engine'] as const).map((m) => (
@@ -217,8 +217,9 @@ export function SettingsTab({ onReplayTour, onOpenPrivacy }: { onReplayTour: () 
         </div>
         <EngineProbe />
         <p className="text-[10.5px] leading-relaxed text-slate-600">
-          The engine exposes <span className="font-mono">POST /api/v1/stego&#123;/hide,/extract,/scan,/clean,/capacity&#125;</span>.
-          Only this origin is allowed by the app&apos;s Content-Security-Policy; files never touch disk on the engine side.
+          The engine exposes <span className="font-mono">POST /api/v1/stego&#123;/hide,/extract,/scan,/clean,/capacity&#125;</span> and
+          <span className="font-mono"> GET /</span> for a health check. Files stay in RAM on both sides; when the engine URL is a Vercel host,
+          request and response bodies are limited to 4.5 MB by that platform.
         </p>
       </section>
 

@@ -81,7 +81,7 @@ const PROTECTIONS = [
   {
     icon: ShieldCheck,
     title: '100% Private',
-    body: 'Your files and secret messages never leave your computer or get saved on any external database.',
+    body: 'Local browser work stays on your computer. Files are sent only to a Java engine when you explicitly choose that mode, and the engine uses RAM without an external database.',
   },
   {
     icon: LockKeyhole,
@@ -100,38 +100,38 @@ const MEDIUMS = [
   {
     icon: ImageIcon,
     title: 'Photos',
-    body: 'Hide secrets inside ordinary pictures. The pixels change so slightly that no eye — or camera — can tell.',
-    formats: 'PNG · BMP · WebP',
+    body: 'Images work right here in your browser. The Java engine can handle them too; prefer lossless files because JPEG saves can disturb hidden data.',
+    formats: 'Browser + Java engine · PNG · BMP · WebP · GIF · TIFF · JPEG',
   },
   {
     icon: Music,
     title: 'Music & Audio',
-    body: 'Tuck messages into the quietest parts of a sound file — far below what any human ear can hear.',
-    formats: 'WAV · FLAC',
+    body: 'Needs the Java engine. It places the secret in WAV samples or FLAC padding while keeping playback unchanged.',
+    formats: 'Java engine · WAV · FLAC',
   },
   {
     icon: Video,
     title: 'Videos',
-    body: 'Conceal data between video frames, where players glide right past it without a flicker.',
-    formats: 'MP4 · MKV · AVI',
+    body: 'Needs the Java engine. MP4 and MKV use safe container padding; AVI uses its frame data. Do not re-encode the result.',
+    formats: 'Java engine · MP4 · MKV · AVI',
   },
   {
     icon: FileText,
     title: 'Documents',
-    body: 'Add invisible watermarks and hidden layers to everyday documents — the pages look untouched.',
-    formats: 'PDF · DOCX',
+    body: 'Needs the Java engine. PDF and DOCX receive an invisible structural addition while their visible pages stay the same.',
+    formats: 'Java engine · PDF · DOCX',
   },
   {
     icon: Code2,
     title: 'Text & Code',
-    body: 'Sprinkle invisible characters between the letters, or leave secret patterns at the end of lines.',
-    formats: 'TXT · Java · JS · C++',
+    body: 'Needs the Java engine. It uses invisible characters in the text, so keep the file as UTF-8 and do not strip whitespace.',
+    formats: 'Java engine · TXT · MD · Java · JS · TS · C/C++ · H/HPP · PY · JSON · CSV',
   },
   {
     icon: Network,
     title: 'Network Packets',
-    body: 'Slip secrets into the tiny gaps of internet traffic — like whispering between the words of a conversation.',
-    formats: 'PCAP · Traffic streams',
+    body: 'Needs the Java engine. PCAP and PCAPNG captures use one small bit from each suitable IPv4 packet.',
+    formats: 'Java engine · PCAP · PCAPNG',
   },
 ] as const;
 
@@ -201,7 +201,7 @@ function UnderTheHood() {
           <TechSpec
             icon={Boxes}
             title="Local-first browser layer"
-            body="The Next.js workspace keeps its zero-knowledge guarantees: Web Workers for LSB scatter/gather, IndexedDB (Dexie) for the local vault, File System Access API for opt-in PC backups, and zero network calls with user data."
+            body="Local image work uses Web Workers and does not make a network request. When you explicitly select Java engine mode, the chosen carrier is sent to the configured Java 17 service for volatile-RAM processing; that service has no disk or database path. IndexedDB and the File System Access API are only used by the existing opt-in local vault and downloads."
           />
 
           <div className="flex flex-wrap gap-2 pt-1">
@@ -241,9 +241,10 @@ export function AboutModal({ onClose }: { onClose: () => void }) {
           <h3 className="card-title mt-2">What is StegoBolt?</h3>
           <p className="mt-2 text-[13px] leading-relaxed text-slate-300">
             StegoBolt is a <span className="font-medium text-slate-100">digital vault that lets you hide secret text
-            messages or sensitive files inside ordinary photos, audio clips, and documents</span>. Think of it like{' '}
-            <span className="font-medium text-emerald-300">digital invisible ink</span> — the file looks completely
-            normal, but only someone with your password can reveal what&apos;s hidden inside.
+            messages or sensitive files inside ordinary pictures, audio, videos, documents, text/code files and network captures</span>.
+            Think of it like <span className="font-medium text-emerald-300">digital invisible ink</span> — the file looks
+            normal, but only someone with your password can reveal what&apos;s hidden inside. Images work in this browser;
+            the other five kinds use the optional Java engine.
           </p>
 
           <div className="mt-3 flex flex-wrap gap-2">
@@ -287,7 +288,7 @@ export function AboutModal({ onClose }: { onClose: () => void }) {
         <UnderTheHood />
 
         <p className="rounded-lg border border-hair bg-panel2/40 px-3 py-2 text-[11px] leading-relaxed text-slate-500">
-          Lossless carriers work best (PNG, BMP, WebP, WAV, PDF…): lossy recompression — like saving over a JPEG — can
+          Lossless carriers work best (PNG, BMP, WebP, WAV, FLAC, documents and text): lossy recompression — like saving over a JPEG — can
           disturb the hidden layer. Container format:{' '}
           <span className="font-mono">SBV2</span> framing, sealed with{' '}
           <span className="font-mono">AES-256-GCM</span> before it is hidden.
