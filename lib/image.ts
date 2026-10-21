@@ -1,5 +1,7 @@
 'use client';
 
+import { extensionOf, kindForFile, type CarrierKind } from './mediums';
+
 /**
  * Canvas-based codec. All pixel access happens via ImageData — the browser
  * never uploads anything (no <form> posts, no fetches).
@@ -79,7 +81,7 @@ export async function encodeBlob(width: number, height: number, data: Uint8Array
 }
 
 export interface ProbeInfo {
-  kind: 'image' | 'audio' | 'pdf' | 'text' | 'other';
+  kind: CarrierKind;
   type: string;
   width?: number;
   height?: number;
@@ -87,26 +89,27 @@ export interface ProbeInfo {
 
 export async function probeFile(file: File): Promise<ProbeInfo> {
   const type = file.type || guessType(file.name);
-  if (/^image\//.test(type)) {
+  const kind = kindForFile(file.name, type);
+
+  // Keep the browser probe useful even when a browser reports a generic MIME
+  // type. The extension list is the product allow-list and is also what the
+  // dropzone advertises to file pickers.
+  if (kind === 'image') {
     try {
       const bmp = await createImageBitmap(file);
       const w = bmp.width;
       const h = bmp.height;
       bmp.close?.();
-      return { kind: 'image', type, width: w, height: h };
+      return { kind, type, width: w, height: h };
     } catch {
-      return { kind: 'image', type };
+      return { kind, type };
     }
   }
-  if (/^audio\//.test(type) || /\.(wav|flac|mp3)$/i.test(file.name)) return { kind: 'audio', type };
-  if (type === 'application/pdf' || /\.pdf$/i.test(file.name)) return { kind: 'pdf', type };
-  if (/^text\//.test(type)) return { kind: 'text', type };
-  return { kind: 'other', type };
+  return { kind, type };
 }
 
 function guessType(name: string): string {
-  const ext = name.split('.').pop()?.toLowerCase();
-  switch (ext) {
+  switch (extensionOf(name)) {
     case 'png':
       return 'image/png';
     case 'jpg':
@@ -118,10 +121,45 @@ function guessType(name: string): string {
       return 'image/webp';
     case 'gif':
       return 'image/gif';
+    case 'tif':
+    case 'tiff':
+      return 'image/tiff';
     case 'wav':
       return 'audio/wav';
+    case 'flac':
+      return 'audio/flac';
+    case 'mp4':
+      return 'video/mp4';
+    case 'mkv':
+      return 'video/x-matroska';
+    case 'avi':
+      return 'video/x-msvideo';
     case 'pdf':
       return 'application/pdf';
+    case 'docx':
+      return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    case 'json':
+      return 'application/json';
+    case 'js':
+      return 'text/javascript';
+    case 'csv':
+      return 'text/csv';
+    case 'md':
+      return 'text/markdown';
+    case 'java':
+      return 'text/x-java-source';
+    case 'c':
+    case 'h':
+    case 'cpp':
+    case 'hpp':
+      return 'text/x-c';
+    case 'py':
+      return 'text/x-python';
+    case 'txt':
+      return 'text/plain';
+    case 'pcap':
+    case 'pcapng':
+      return 'application/vnd.tcpdump.pcap';
     default:
       return 'application/octet-stream';
   }

@@ -11,6 +11,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { analyzeLsbPlane, detectSbv2Magic, renderLsbPlane, threatAssessment, type LsbStats, type ThreatVerdict } from '@/lib/analysis';
 import { fmtBytes, fmtInt, fmtSci } from '@/lib/format';
 import { capacityBits } from '@/lib/lsbcore';
+import { scan as engineScan, setEngineBase, type ScanReport } from '@/lib/engineApi';
+import { CARRIER_ACCEPT, localEngineRequired } from '@/lib/mediums';
 import { addRecord } from '@/lib/vault';
 import { useVault } from '@/lib/session';
 import { FileDropzone } from '@/components/ui/Dropzone';
@@ -91,6 +93,55 @@ function LsbPlaneCanvas({ plane, width, height }: { plane: Uint8ClampedArray<Arr
   return <canvas ref={ref} width={336} height={189} className="h-[189px] w-[336px] rounded-md border border-hair bg-black" />;
 }
 
+function EngineScanPanel({ report }: { report: ScanReport }) {
+  const score = Math.max(0, Math.min(100, report.threatScore));
+  const tone = score >= 75 ? 'text-red-300' : score >= 40 ? 'text-amber-300' : 'text-emerald-300';
+  return (
+    <div className="space-y-4">
+      <div className="rounded-xl border border-sky-500/25 bg-sky-500/5 p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-sky-300">Java engine report</p>
+            <p className="mt-1 text-[12px] text-slate-400">{report.medium} · {fmtBytes(report.carrierBytes)} inspected in RAM</p>
+          </div>
+          <p className={`font-mono text-2xl font-bold ${tone}`}>{score}<span className="text-xs text-slate-500">/100</span></p>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
+        <div className="rounded-lg border border-hair bg-panel2/50 px-2 py-2">
+          <p className="text-[9px] font-bold uppercase tracking-widest text-slate-500">Chi-square p</p>
+          <p className="mt-1 font-mono text-[12px] text-slate-200">{report.chiSquareProbability.toExponential(2)}</p>
+        </div>
+        <div className="rounded-lg border border-hair bg-panel2/50 px-2 py-2">
+          <p className="text-[9px] font-bold uppercase tracking-widest text-slate-500">SPA ratio</p>
+          <p className="mt-1 font-mono text-[12px] text-slate-200">{report.spaEmbeddingRatio.toFixed(3)}</p>
+        </div>
+        <div className="rounded-lg border border-hair bg-panel2/50 px-2 py-2">
+          <p className="text-[9px] font-bold uppercase tracking-widest text-slate-500">LSB ones</p>
+          <p className="mt-1 font-mono text-[12px] text-slate-200">{report.lsbOnesRatio.toFixed(3)}</p>
+        </div>
+        <div className="rounded-lg border border-hair bg-panel2/50 px-2 py-2">
+          <p className="text-[9px] font-bold uppercase tracking-widest text-slate-500">Container</p>
+          <p className={`mt-1 font-mono text-[12px] ${report.containerSignatureFound ? 'text-red-300' : 'text-emerald-300'}`}>
+            {report.containerSignatureFound ? 'found' : 'not found'}
+          </p>
+        </div>
+      </div>
+      <div className="rounded-lg border border-hair bg-panel2/40 p-3">
+        <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">Engine indicators</p>
+        <ul className="space-y-1.5 text-[11px] leading-relaxed text-slate-300">
+          {(report.indicators.length ? report.indicators : ['No indicators returned by the engine.']).map((indicator) => (
+            <li key={indicator} className="flex gap-2"><span className="text-sky-400">•</span><span>{indicator}</span></li>
+          ))}
+        </ul>
+      </div>
+      {report.exifTags && report.exifTags.length > 0 && (
+        <p className="text-[10.5px] text-slate-500">Image metadata tags found: {report.exifTags.length}. Use Clean to remove them.</p>
+      )}
+    </div>
+  );
+}
+
 export function ScanTab() {
   const vault = useVault();
   const { loaded, pixels, loading, error, setError, load, clear } = useStegoFile();
@@ -99,27 +150,74 @@ export function ScanTab() {
   const [verdict, setVerdict] = useState<ThreatVerdict | null>(null);
   const [plane, setPlane] = useState<{ arr: Uint8ClampedArray<ArrayBuffer>; w: number; h: number } | null>(null);
   const [signature, setSignature] = useState<boolean | null>(null);
+  const [engineReport, setEngineReport] = useState<ScanReport | null>(null);
 
   const run = useCallback(async () => {
-    if (!loaded || !pixels) {
-      setError('Load an image carrier to scan.');
+    const engineMode = vault.settings.engineMode === 'engine';
+    if (!loaded) {
+      setError('Choose a supported carrier file first.');
       return;
     }
+    if (!engineMode && loaded.kind !== 'image') {
+      setError(localEngineRequired(loaded.kind, 'scanning'));
+      return;
+    }
+    if (!engineMode && !pixels) {
+      setError('The image could not be decoded in this browser. Try a smaller, valid image or switch to Java engine mode.');
+      return;
+    }
+    const imagePixels = pixels;
     setBusy(true);
     setError(null);
     try {
+      // Engine mode is authoritative for every carrier, including images.
+      if (engineMode) {
+        setEngineBase(vault.settings.engineUrl);
+        const report = await engineScan(loaded.file);
+        setEngineReport(report);
+        setStats(null);
+        setVerdict(null);
+        setPlane(null);
+        setSignature(report.containerSignatureFound);
+        vault.setArtifacts({
+          coverName: loaded.name,
+          coverInfo: `Engine scan of ${loaded.name} · threat ${report.threatScore}/100`,
+        });
+        void addRecord({
+          ts: Date.now(),
+          op: 'Scan',
+          coverName: loaded.name,
+          size: loaded.size,
+          dims: loaded.width && loaded.height ? `${loaded.width}×${loaded.height}` : '—',
+          backup: 'No local download',
+          hash: loaded.hash,
+          meta: {
+            Via: 'Java engine',
+            Medium: report.medium,
+            'Threat score': `${report.threatScore}/100`,
+            'Chi-square p': fmtSci(report.chiSquareProbability),
+          },
+        }).then(() => vault.refreshStorage());
+        vault.log(`Java engine scan of ${loaded.name}: threat ${report.threatScore}/100`, report.threatScore < 25 ? 'ok' : 'warn');
+        return;
+      }
+
+      if (!imagePixels) {
+        setError('The image could not be decoded in this browser. Try a smaller, valid image or switch to Java engine mode.');
+        return;
+      }
       // let the spinner paint first
       await new Promise((r) => setTimeout(r, 30));
-      const s = analyzeLsbPlane(pixels.data, pixels.width, pixels.height);
-      const magic = detectSbv2Magic(pixels.data);
+      const s = analyzeLsbPlane(imagePixels.data, imagePixels.width, imagePixels.height);
+      const magic = detectSbv2Magic(imagePixels.data);
       const v = threatAssessment(s, magic);
-      const planeArr = renderLsbPlane(pixels.data, pixels.width, pixels.height);
+      const planeArr = renderLsbPlane(imagePixels.data, imagePixels.width, imagePixels.height);
       setStats(s);
       setVerdict(v);
       setSignature(magic);
-      setPlane({ arr: planeArr, w: pixels.width, h: pixels.height });
+      setPlane({ arr: planeArr, w: imagePixels.width, h: imagePixels.height });
       vault.setArtifacts({
-        coverBytes: pixels.data,
+        coverBytes: imagePixels.data,
         coverName: loaded.name,
         coverInfo: `Scanned carrier ${loaded.name} · threat ${v.score}/100 (${v.level})`,
       });
@@ -128,7 +226,7 @@ export function ScanTab() {
         op: 'Scan',
         coverName: loaded.name,
         size: loaded.size,
-        dims: `${pixels.width}×${pixels.height}`,
+        dims: `${imagePixels.width}×${imagePixels.height}`,
         backup: 'Saved',
         hash: loaded.hash,
         meta: { 'Threat score': `${v.score}/100`, Verdict: v.level, 'Chi-square p': fmtSci(s.pValue) },
@@ -146,12 +244,13 @@ export function ScanTab() {
       <section className="card space-y-4 p-5">
         <h3 className="card-title">Evidence Carrier</h3>
         <FileDropzone
-          accept="image/*"
-          hint="Any raster image — analyze the suspicious file without revealing it to anyone"
+          accept={CARRIER_ACCEPT}
+          hint="Scan images locally, or use Java engine mode for WAV/FLAC, video, documents, text/code and PCAP"
           filled={!!loaded}
           onFile={(f) => {
             setStats(null);
             setVerdict(null);
+            setEngineReport(null);
             void load(f);
           }}
         >
@@ -163,6 +262,7 @@ export function ScanTab() {
                 clear();
                 setStats(null);
                 setVerdict(null);
+                setEngineReport(null);
               }}
             />
           )}
@@ -174,14 +274,18 @@ export function ScanTab() {
         )}
         {error && <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11.5px] text-red-300">{error}</p>}
 
-        <button onClick={() => void run()} disabled={busy || !pixels} className="btn-green w-full">
+        <button
+          onClick={() => void run()}
+          disabled={busy || !loaded || (loaded?.kind === 'image' && !pixels && vault.settings.engineMode !== 'engine')}
+          className="btn-green w-full"
+        >
           {busy ? (
             <>
-              <Loader2 size={14} className="animate-spin" /> Running chi-square + entropy suite…
+              <Loader2 size={14} className="animate-spin" /> {vault.settings.engineMode === 'engine' ? 'Asking Java engine for forensic report…' : 'Running chi-square + entropy suite…'}
             </>
           ) : (
             <>
-              <Radar size={14} /> [ Run Forensic Scan ]
+              <Radar size={14} /> [ {vault.settings.engineMode === 'engine' ? 'Run Engine Scan' : 'Run Forensic Scan'} ]
             </>
           )}
         </button>
@@ -216,7 +320,9 @@ export function ScanTab() {
           )}
         </h3>
 
-        {!verdict ? (
+        {engineReport ? (
+          <EngineScanPanel report={engineReport} />
+        ) : !verdict ? (
           <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
             <ScanSearch size={22} className="text-slate-700" />
             <p className="text-[12px] text-slate-500">No scan yet</p>

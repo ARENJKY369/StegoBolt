@@ -13,7 +13,8 @@ import { measureQuality } from '@/lib/analysis';
 import { fmtBytes } from '@/lib/format';
 import { LsbError } from '@/lib/lsbcore';
 import { workerExtract } from '@/lib/worker';
-import { extract as engineExtract } from '@/lib/engineApi';
+import { extract as engineExtract, setEngineBase } from '@/lib/engineApi';
+import { CARRIER_ACCEPT, localEngineRequired } from '@/lib/mediums';
 import { addRecord } from '@/lib/vault';
 import { useVault } from '@/lib/session';
 import { FileDropzone } from '@/components/ui/Dropzone';
@@ -28,6 +29,9 @@ interface Extracted {
   cipher: number;
   sealedLen: number;
   bitsUsed: number;
+  viaEngine?: boolean;
+  medium?: string;
+  sha256?: string | null;
 }
 
 const FRIENDLY: Record<string, string> = {
@@ -60,8 +64,16 @@ export function ExtractTab() {
 
   const run = async () => {
     const engineMode = vault.settings.engineMode === 'engine';
-    if (!loaded || (!pixels && !engineMode)) {
-      setError('Load a stego image first.');
+    if (!loaded) {
+      setError('Choose a supported stego carrier first.');
+      return;
+    }
+    if (!engineMode && loaded.kind !== 'image') {
+      setError(localEngineRequired(loaded.kind, 'extraction'));
+      return;
+    }
+    if (!engineMode && !pixels) {
+      setError('The image could not be decoded in this browser. Try a smaller, valid image or switch to Java engine mode.');
       return;
     }
     setBusy(true);
@@ -69,6 +81,7 @@ export function ExtractTab() {
     setResult(null);
     try {
       if (engineMode && loaded) {
+        setEngineBase(vault.settings.engineUrl);
         const report = await engineExtract(loaded.file, password);
         if (!report.found) {
           setError('No StegoBolt container found in this file — either it is a clean cover, or it was recompressed after embedding.');
@@ -77,7 +90,16 @@ export function ExtractTab() {
         }
         const plain = report.payloadBase64 ? b64ToBytes(report.payloadBase64) : new TextEncoder().encode(report.payloadText ?? '');
         const text = report.payloadText ?? new TextDecoder().decode(plain);
-        setResult({ text, bytes: plain, cipher: CIPHER.RAW, sealedLen: report.payloadBytes ?? plain.length, bitsUsed: (report.payloadBytes ?? plain.length) * 8 });
+        setResult({
+          text,
+          bytes: plain,
+          cipher: CIPHER.AES_256_GCM,
+          sealedLen: report.payloadBytes ?? plain.length,
+          bitsUsed: (report.payloadBytes ?? plain.length) * 8,
+          viaEngine: true,
+          medium: report.medium,
+          sha256: report.sha256,
+        });
         vault.setArtifacts({
           coverName: loaded.name,
           coverInfo: `Stego carrier ${loaded.name} · ${fmtBytes(loaded.size)} · processed by the Java engine`,
@@ -99,7 +121,7 @@ export function ExtractTab() {
         return;
       }
       if (!pixels) {
-        setError('Load a stego image first.');
+        setError('The image could not be decoded in this browser. Try a smaller, valid image or switch to Java engine mode.');
         return;
       }
       const out = await workerExtract(pixels.data);
@@ -144,8 +166,8 @@ export function ExtractTab() {
       <section className="card p-5">
         <h3 className="card-title mb-4">Stego Carrier Input</h3>
         <FileDropzone
-          accept="image/png,image/bmp,image/webp,image/gif,image/tiff,image/jpeg"
-          hint="Drop a .stego.png (or any carrier you want audited) — nothing is uploaded"
+          accept={CARRIER_ACCEPT}
+          hint="PNG/BMP/WebP/GIF/TIFF/JPEG · WAV/FLAC · MP4/MKV/AVI · PDF/DOCX · text/code · PCAP/PCAPNG"
           filled={!!loaded}
           onFile={(f) => {
             setResult(null);
@@ -204,11 +226,16 @@ export function ExtractTab() {
       <section className="card flex flex-col p-5">
         <h3 className="card-title mb-3">Recovery Console</h3>
         <p className="text-[11.5px] leading-relaxed text-slate-500">
-          StegoBolt parses the <span className="font-mono text-slate-300">SBV2</span> magic + length prefix from the LSB plane, re-derives
-          the AES key from your passphrase and authenticates the GCM tag. Tampered pixels fail the tag instead of leaking garbage.{' '}
+          {vault.settings.engineMode === 'engine'
+            ? 'The Java engine identifies the carrier, opens the sealed SBV2-J container and returns only the recovered payload report.'
+            : 'StegoBolt parses the SBV2 magic and length prefix from an image LSB plane, then authenticates the GCM tag before showing any plaintext.'}{' '}
           <InfoTip text={TIPS.AES} width={300} />
         </p>
-        <button onClick={() => void run()} disabled={busy || !pixels} className="btn-green mt-4 w-full">
+        <button
+          onClick={() => void run()}
+          disabled={busy || !loaded || (loaded?.kind === 'image' && !pixels && vault.settings.engineMode !== 'engine')}
+          className="btn-green mt-4 w-full"
+        >
           {busy ? (
             <>
               <Loader2 size={14} className="animate-spin" /> Sweeping LSB plane…
@@ -223,14 +250,21 @@ export function ExtractTab() {
         {result ? (
           <div className="mt-4 flex min-h-0 flex-1 flex-col rounded-xl border border-brand/35 bg-black/25 p-3.5">
             <p className="flex items-center gap-1.5 text-[11px] font-semibold text-emerald-300">
-              <CheckCircle2 size={12} /> Payload recovered — {CIPHER_LABELS[result.cipher] ?? 'raw'} · integrity verified
+              <CheckCircle2 size={12} /> Payload recovered — {result.viaEngine ? 'Java engine · AES-256-GCM' : `${CIPHER_LABELS[result.cipher] ?? 'raw'} · integrity verified`}
             </p>
+            {result.viaEngine && (
+              <p className="mt-1 font-mono text-[10px] text-sky-300">
+                {result.medium} carrier · plaintext {fmtBytes(result.bytes.length)}{result.sha256 ? ` · SHA-256 ${result.sha256.slice(0, 16)}…` : ''}
+              </p>
+            )}
             <pre className="mt-2 min-h-[110px] flex-1 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-hair bg-panel2/60 p-3 font-mono text-[12px] leading-relaxed text-slate-100">
               {result.text || '(empty payload)'}
             </pre>
             <div className="mt-2.5 flex items-center justify-between text-[10.5px] text-slate-500">
               <span>
-                {fmtBytes(result.bytes.length)} · {result.bitsUsed.toLocaleString()} bits swept · salt+iv {result.sealedLen - result.bytes.length} B
+                {result.viaEngine
+                  ? `${fmtBytes(result.bytes.length)} plaintext recovered · Java engine report`
+                  : `${fmtBytes(result.bytes.length)} · ${result.bitsUsed.toLocaleString()} bits swept · salt+iv ${Math.max(0, result.sealedLen - result.bytes.length)} B`}
               </span>
               <span className="flex gap-1.5">
                 <button

@@ -27,7 +27,7 @@ const securityHeaders = [
       "worker-src 'self' blob:",
       // Zero network calls for user data — connect budget is same-origin only
       // (plus the HMR websocket and the optional local Java engine).
-      "connect-src 'self' ws: http://localhost:8080",
+      "connect-src 'self' ws: http://localhost:8080 http://127.0.0.1:8080 https:",
       "frame-src 'self'",
     ].join('; '),
   },
