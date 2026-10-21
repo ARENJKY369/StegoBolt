@@ -9,6 +9,8 @@
 import { Check, Eraser, Loader2, RadioTower, ShieldCheck, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { sha256Hex } from '@/lib/crypto';
+import { clean as engineClean, setEngineBase, type CleanResponse } from '@/lib/engineApi';
+import { CARRIER_ACCEPT, localEngineRequired } from '@/lib/mediums';
 import { inspectMetadata, type MetadataReport } from '@/lib/exif';
 import { encodeBlob } from '@/lib/image';
 import { fmtBytes } from '@/lib/format';
@@ -31,7 +33,16 @@ export function CleanTab() {
   const [fmt, setFmt] = useState<'image/png' | 'image/jpeg'>('image/png');
   const [quality, setQuality] = useState(0.94);
   const [busy, setBusy] = useState(false);
-  const [out, setOut] = useState<{ blob: Blob; name: string; hash: string; changed: number; psnr: number; after: MetadataReport | null } | null>(null);
+  const [out, setOut] = useState<{
+    blob: Blob;
+    name: string;
+    hash: string;
+    changed: number;
+    psnr: number | null;
+    after: MetadataReport | null;
+    viaEngine?: boolean;
+    engineReport?: CleanResponse;
+  } | null>(null);
 
   const report: MetadataReport | null = useMemo(() => {
     if (!loaded?.bytes) return null;
@@ -43,28 +54,84 @@ export function CleanTab() {
   }, [loaded]);
 
   const run = async () => {
-    if (!loaded || !pixels) {
-      setError('Sanitize works on raster images (PNG / JPEG / BMP / WebP…) — load one first.');
+    const engineMode = vault.settings.engineMode === 'engine';
+    if (!loaded) {
+      setError('Choose a supported carrier file first.');
       return;
     }
+    if (!engineMode && loaded.kind !== 'image') {
+      setError(localEngineRequired(loaded.kind, 'cleaning'));
+      return;
+    }
+    if (!engineMode && !pixels) {
+      setError('The image could not be decoded in this browser. Try a smaller, valid image or switch to Java engine mode.');
+      return;
+    }
+    const imagePixels = pixels;
     setBusy(true);
     setError(null);
     setOut(null);
     try {
+      if (engineMode) {
+        setEngineBase(vault.settings.engineUrl);
+        const { report, cleaned, fileName } = await engineClean(loaded.file, noiseFloor);
+        const name = fileName || loaded.name.replace(/\.[^.]+$/, '') + '.clean';
+        const hash = await sha256Hex(cleaned);
+        setOut({
+          blob: cleaned,
+          name,
+          hash,
+          changed: report.changedBits,
+          psnr: report.psnrDb ?? null,
+          after: null,
+          viaEngine: true,
+          engineReport: report,
+        });
+        vault.setArtifacts({
+          coverName: loaded.name,
+          coverInfo: `Original of ${name} · processed by the Java engine`,
+          stegoName: name,
+          stegoInfo: `Sanitized ${name} · ${fmtBytes(report.cleanedBytes)} · ${report.changedBits.toLocaleString()} bits changed`,
+        });
+        void addRecord({
+          ts: Date.now(),
+          op: 'Sanitize',
+          coverName: loaded.name,
+          outName: name,
+          size: cleaned.size,
+          dims: loaded.width && loaded.height ? `${loaded.width}×${loaded.height}` : '—',
+          backup: 'No local download',
+          hash,
+          meta: {
+            Via: 'Java engine',
+            Medium: report.medium,
+            'Tags stripped': report.exifTagsRemoved.toLocaleString(),
+            'LSB bits changed': report.changedBits.toLocaleString(),
+          },
+          blob: cleaned,
+        }).then(() => vault.refreshStorage());
+        vault.log(`Java engine cleaned ${loaded.name} → ${name} (${fmtBytes(cleaned.size)})`, 'ok');
+        return;
+      }
+
+      if (!imagePixels) {
+        setError('The image could not be decoded in this browser. Try a smaller, valid image or switch to Java engine mode.');
+        return;
+      }
       let work: Uint8Array;
       let touched = 0;
       if (noiseFloor) {
-        const res = await workerNoise(pixels.data);
+        const res = await workerNoise(imagePixels.data);
         work = new Uint8Array(res.pixels);
         touched = res.touched;
       } else {
-        work = pixels.data.slice();
+        work = imagePixels.data.slice();
       }
       const passthrough = !noiseFloor && !stripMeta;
       const name = passthrough ? loaded.name : loaded.name.replace(/\.[^.]+$/, '') + (fmt === 'image/png' ? '.clean.png' : '.clean.jpg');
-      const blob = passthrough ? loaded.file : await encodeBlob(pixels.width, pixels.height, work, fmt, quality);
+      const blob = passthrough ? loaded.file : await encodeBlob(imagePixels.width, imagePixels.height, work, fmt, quality);
       const hash = await sha256Hex(blob);
-      const q = measureQuality(pixels.data, work, touched, pixels.width * pixels.height * 3);
+      const q = measureQuality(imagePixels.data, work, touched, imagePixels.width * imagePixels.height * 3);
       let after: MetadataReport | null = null;
       if (stripMeta) {
         try {
@@ -75,7 +142,7 @@ export function CleanTab() {
       }
       setOut({ blob, name, hash, changed: q.bitsChanged, psnr: q.psnrDb, after });
       vault.setArtifacts({
-        coverBytes: pixels.data,
+        coverBytes: imagePixels.data,
         coverName: loaded.name,
         coverInfo: `Original of ${name}`,
         stegoBytes: work,
@@ -88,7 +155,7 @@ export function CleanTab() {
         coverName: loaded.name,
         outName: name,
         size: blob.size,
-        dims: `${pixels.width}×${pixels.height}`,
+        dims: `${imagePixels.width}×${imagePixels.height}`,
         backup: 'Saved',
         hash,
         meta: { 'Tags stripped': report ? report.tags.length + report.textChunks.length : 'n/a', 'LSB bits re-randomized': touched.toLocaleString() },
@@ -103,14 +170,15 @@ export function CleanTab() {
   };
 
   const tagCount = report ? report.tags.length : 0;
+  const engineMode = vault.settings.engineMode === 'engine';
 
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
       <section className="card space-y-4 p-5">
         <h3 className="card-title">Carrier to Scrub</h3>
         <FileDropzone
-          accept="image/*"
-          hint="Metadata + hidden-bit residue are erased locally before re-export"
+          accept={CARRIER_ACCEPT}
+          hint="Clean images locally, or use Java engine mode for WAV/FLAC, video, documents, text/code and PCAP"
           filled={!!loaded}
           onFile={(f) => {
             setOut(null);
@@ -171,12 +239,17 @@ export function CleanTab() {
         <h3 className="card-title flex items-center gap-2">
           <Eraser size={14} className="text-fuchsia-400" /> Sanitization Recipe
         </h3>
+        {engineMode && (
+          <p className="mt-3 rounded-lg border border-sky-500/25 bg-sky-500/10 px-3 py-2 text-[11px] leading-relaxed text-sky-200">
+            Java engine mode delegates Clean for all six mediums. It removes the medium&apos;s hidden layer and returns the sanitized binary object with an X-StegoBolt-Report.
+          </p>
+        )}
         <div className="mt-3 space-y-3">
           <div className="flex items-center justify-between rounded-lg border border-hair bg-panel2/40 px-3 py-2.5">
             <span className="text-[12px] font-medium text-slate-300">
               Strip EXIF / XMP metadata <InfoTip text="Canvas re-encode rebuilds the container from raw pixels — every tag, thumbnail, ICC hint and PNG text chunk outside IHDR/IDAT/IEND is discarded." width={300} />
             </span>
-            <Toggle checked={stripMeta} onChange={setStripMeta} label="Strip metadata" />
+            <Toggle checked={stripMeta} onChange={setStripMeta} disabled={engineMode} label="Strip metadata" />
           </div>
           <div className="flex items-center justify-between rounded-lg border border-hair bg-panel2/40 px-3 py-2.5">
             <span className="text-[12px] font-medium text-slate-300">
@@ -187,7 +260,7 @@ export function CleanTab() {
           <div className="grid grid-cols-2 items-center gap-3 rounded-lg border border-hair bg-panel2/40 px-3 py-2.5">
             <span className="text-[12px] font-medium text-slate-300">Output container</span>
             <div className="flex items-center justify-end gap-2">
-              <select value={fmt} onChange={(e) => setFmt(e.target.value as 'image/png' | 'image/jpeg')} className="select !w-auto !bg-transparent !py-1 text-[11.5px]">
+              <select disabled={engineMode} value={fmt} onChange={(e) => setFmt(e.target.value as 'image/png' | 'image/jpeg')} className="select !w-auto !bg-transparent !py-1 text-[11.5px]">
                 <option value="image/png">PNG · lossless</option>
                 <option value="image/jpeg">JPEG · recompress</option>
               </select>
@@ -208,14 +281,18 @@ export function CleanTab() {
 
         {error && <p className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11.5px] text-red-300">{error}</p>}
 
-        <button onClick={() => void run()} disabled={busy || !pixels} className="btn-green mt-4 w-full">
+        <button
+          onClick={() => void run()}
+          disabled={busy || !loaded || (loaded?.kind === 'image' && !pixels && !engineMode)}
+          className="btn-green mt-4 w-full"
+        >
           {busy ? (
             <>
-              <Loader2 size={14} className="animate-spin" /> Re-encoding through Canvas…
+              <Loader2 size={14} className="animate-spin" /> {engineMode ? 'Cleaning through Java engine…' : 'Re-encoding through Canvas…'}
             </>
           ) : (
             <>
-              <Eraser size={14} /> [ Sanitize &amp; Save to Vault ]
+              <Eraser size={14} /> [ {engineMode ? 'Clean with Java Engine' : 'Sanitize & Save to Vault'} ]
             </>
           )}
         </button>
@@ -235,7 +312,8 @@ export function CleanTab() {
               <div className="rounded-lg border border-hair bg-panel2/50 px-2 py-2">
                 <p className="text-[9px] font-bold uppercase tracking-widest text-slate-500">Tags after</p>
                 <p className="mt-0.5 flex items-center justify-center gap-1 font-mono text-[13px] font-semibold text-emerald-400">
-                  {out.after ? out.after.tags.length : '—'} {out.after && out.after.tags.length === 0 && <Check size={11} />}
+                  {out.engineReport ? out.engineReport.exifTagsRemoved : out.after ? out.after.tags.length : '—'}{' '}
+                  {out.engineReport ? 'removed' : out.after && out.after.tags.length === 0 ? <Check size={11} /> : null}
                 </p>
               </div>
               <div className="rounded-lg border border-hair bg-panel2/50 px-2 py-2">
@@ -244,9 +322,14 @@ export function CleanTab() {
               </div>
               <div className="rounded-lg border border-hair bg-panel2/50 px-2 py-2">
                 <p className="text-[9px] font-bold uppercase tracking-widest text-slate-500">PSNR vs original</p>
-                <p className="mt-0.5 font-mono text-[13px] font-semibold text-slate-200">{Number.isFinite(out.psnr) ? `${out.psnr.toFixed(1)} dB` : '∞'}</p>
+                <p className="mt-0.5 font-mono text-[13px] font-semibold text-slate-200">{out.psnr == null ? '—' : Number.isFinite(out.psnr) ? `${out.psnr.toFixed(1)} dB` : '∞'}</p>
               </div>
             </div>
+            {out.engineReport && (
+              <p className="mt-2.5 rounded-md border border-sky-500/20 bg-sky-500/5 px-2.5 py-2 text-[10.5px] leading-relaxed text-sky-200">
+                Engine report: {out.engineReport.medium} · {fmtBytes(out.engineReport.originalBytes)} → {fmtBytes(out.engineReport.cleanedBytes)} · {out.engineReport.lsbBitsReRandomized.toLocaleString()} slots re-randomized · {out.engineReport.changedBits.toLocaleString()} bits changed.
+              </p>
+            )}
             <p className="mt-2.5 flex items-start gap-1.5 text-[10.5px] leading-relaxed text-slate-500">
               <X size={11} className="mt-0.5 shrink-0 text-red-400" />
               Pre-sanitize fingerprint was {loaded?.hash.slice(0, 18)}… — publish only the clean output. The original stays in RAM

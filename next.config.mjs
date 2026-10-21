@@ -25,9 +25,9 @@ const securityHeaders = [
       "font-src 'self' data:",
       // LSB work runs in an inline Blob Web Worker.
       "worker-src 'self' blob:",
-      // Zero network calls for user data — connect budget is same-origin only
-      // (plus the HMR websocket and the optional local Java engine).
-      "connect-src 'self' ws: http://localhost:8080",
+      // User data only goes to the explicitly configured Java engine: local
+      // development ports or an HTTPS deployment, plus the HMR websocket.
+      "connect-src 'self' ws: http://localhost:* http://127.0.0.1:* https:",
       "frame-src 'self'",
     ].join('; '),
   },

@@ -63,7 +63,11 @@ public final class AudioStegoEngine implements StegoEngine {
             if (embedded != null) {
                 MemoryHygiene.wipe(embedded);
             }
-            byte[] cleaned = hideFlac(cover, new byte[0]); // empty padding payload
+            // Do not replace the secret with an empty SB2J marker: that would
+            // make a cleaned FLAC look like a malformed stego object. Remove
+            // the StegoBolt padding block while preserving other FLAC metadata
+            // and the audio frames byte-for-byte.
+            byte[] cleaned = stripFlac(cover);
             return new SanitizeOutcome(cleaned, gone, gone);
         }
         AudioTrack track = decodeTrack(cover);
@@ -195,8 +199,8 @@ public final class AudioStegoEngine implements StegoEngine {
     /**
      * FLAC layout: "fLaC" then metadata blocks (1 flag/type byte + 3-byte length),
      * the last one flagged 0x80. We rebuild the metadata section with a PADDING
-     * block (type 0) appended last that carries the SBV2-J container after a
-     * 4-byte "SB2J" guard; audio frames are copied through untouched.
+     * block (type 1) appended last that carries the SBV2-J container after a
+     * 4-byte "SB2J" guard; STREAMINFO and audio frames are copied through untouched.
      */
     private static byte[] hideFlac(byte[] cover, byte[] container) {
         // ---- 1. parse existing metadata blocks -----------------------------
@@ -212,7 +216,8 @@ public final class AudioStegoEngine implements StegoEngine {
             if (blockEnd > cover.length) {
                 throw new StegoException("Corrupt FLAC metadata block");
             }
-            if (type != 0) {
+            // Type 0 is STREAMINFO and must be preserved. Type 1 is PADDING.
+            if (type != 1) {
                 meta.add(new int[]{type, pos + 4, blockEnd});
             }
             pos = blockEnd;
@@ -240,7 +245,7 @@ public final class AudioStegoEngine implements StegoEngine {
             out.write(len & 0xFF);
             out.write(cover, block[1], len);
         }
-        out.write(0x80); // PADDING, last metadata block
+        out.write(0x81); // PADDING (type 1), last metadata block
         int newLen = payload.length;
         out.write((newLen >>> 16) & 0xFF);
         out.write((newLen >>> 8) & 0xFF);
@@ -261,7 +266,7 @@ public final class AudioStegoEngine implements StegoEngine {
             if (blockEnd > cover.length) {
                 return null;
             }
-            if (type == 0 && len > Packet.MAGIC.length) {
+            if (type == 1 && len > Packet.MAGIC.length) {
                 boolean match = true;
                 for (int i = 0; i < Packet.MAGIC.length; i++) {
                     if (cover[pos + 4 + i] != Packet.MAGIC[i]) {
@@ -279,6 +284,60 @@ public final class AudioStegoEngine implements StegoEngine {
             pos = blockEnd;
         }
         return null;
+    }
+
+    /** Remove only StegoBolt PADDING blocks and keep FLAC's STREAMINFO/audio intact. */
+    private static byte[] stripFlac(byte[] cover) {
+        java.util.ArrayList<int[]> blocks = new java.util.ArrayList<>(); // {type, dataStart, blockEnd}
+        int pos = FLAC_HEADER;
+        int audioStart = -1;
+        boolean found = false;
+        while (pos + 4 <= cover.length) {
+            int head = cover[pos] & 0xFF;
+            int type = head & 0x7F;
+            int len = ((cover[pos + 1] & 0xFF) << 16) | ((cover[pos + 2] & 0xFF) << 8) | (cover[pos + 3] & 0xFF);
+            int blockEnd = pos + 4 + len;
+            if (blockEnd > cover.length) {
+                return cover.clone();
+            }
+            boolean stegoPadding = type == 1 && len >= Packet.MAGIC.length;
+            if (stegoPadding) {
+                for (int i = 0; i < Packet.MAGIC.length; i++) {
+                    if (cover[pos + 4 + i] != Packet.MAGIC[i]) {
+                        stegoPadding = false;
+                        break;
+                    }
+                }
+            }
+            if (stegoPadding) {
+                found = true;
+            } else {
+                blocks.add(new int[]{type, pos + 4, blockEnd});
+            }
+            pos = blockEnd;
+            if ((head & 0x80) != 0) {
+                audioStart = blockEnd;
+                break;
+            }
+        }
+        if (!found || audioStart < 0) {
+            return cover.clone();
+        }
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream(cover.length);
+        out.write(cover, 0, FLAC_HEADER);
+        for (int i = 0; i < blocks.size(); i++) {
+            int[] block = blocks.get(i);
+            boolean last = i == blocks.size() - 1;
+            out.write((last ? 0x80 : 0) | (block[0] & 0x7F));
+            int len = block[2] - block[1];
+            out.write((len >>> 16) & 0xFF);
+            out.write((len >>> 8) & 0xFF);
+            out.write(len & 0xFF);
+            out.write(cover, block[1], len);
+        }
+        out.write(cover, audioStart, cover.length - audioStart);
+        return out.toByteArray();
     }
 
     private static long flacCapacityBits(byte[] cover) {

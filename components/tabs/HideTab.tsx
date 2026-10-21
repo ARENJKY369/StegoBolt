@@ -19,7 +19,7 @@ import {
   ShieldCheck,
   Sparkle,
 } from 'lucide-react';
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { CIPHER, ivLenFor, sealPayload, sha256Hex, textEnc } from '@/lib/crypto';
 import { dimsCapacityBytes } from '@/lib/lsbcore';
 import { encodeBlob } from '@/lib/image';
@@ -27,7 +27,9 @@ import { measureQuality } from '@/lib/analysis';
 import { backupDir, fsapiSupported, pickBackupDir, writeToDir, suggestedBackupPath } from '@/lib/fsaccess';
 import { fmtBytes } from '@/lib/format';
 import { workerEmbed } from '@/lib/worker';
-import { hide as engineHide } from '@/lib/engineApi';
+import { capacity as engineCapacity, hide as engineHide, setEngineBase } from '@/lib/engineApi';
+import type { CapacityReport } from '@/lib/engineApi';
+import { CARRIER_ACCEPT, capacityHint, localEngineRequired, vercelBodyLimitWarning } from '@/lib/mediums';
 import { addRecord, exportVaultFile, type VaultRecord } from '@/lib/vault';
 import { useVault } from '@/lib/session';
 import { FileDropzone } from '@/components/ui/Dropzone';
@@ -47,6 +49,7 @@ interface EmbedResult {
   bitsUsed: number;
   capacityBits: number | null;
   viaEngine?: boolean;
+  medium?: string;
 }
 
 export function HideTab() {
@@ -61,6 +64,9 @@ export function HideTab() {
   const [stage, setStage] = useState<string | null>(null);
   const [result, setResult] = useState<EmbedResult | null>(null);
   const [dirNote, setDirNote] = useState<string | null>(null);
+  const [engineCapacityReport, setEngineCapacityReport] = useState<CapacityReport | null>(null);
+  const [engineCapacityBusy, setEngineCapacityBusy] = useState(false);
+  const [engineCapacityError, setEngineCapacityError] = useState<string | null>(null);
 
   const cipher = encrypt ? algorithm : CIPHER.RAW;
   const payloadBytes = useMemo(() => textEnc.encode(payload).length, [payload]);
@@ -69,44 +75,111 @@ export function HideTab() {
     : loaded && loaded.width && loaded.height
     ? dimsCapacityBytes(loaded.width, loaded.height)
     : null;
-  // Sealed layout: salt(16) | iv(ivLenFor) | body — GCM body grows by the 16-byte tag.
+  // Local SBV2 layout: salt(16) | iv | ciphertext/tag plus the 10-byte local header.
   const overhead =
     cipher === CIPHER.RAW ? 28 : 16 + ivLenFor(cipher) + (cipher === CIPHER.AES_256_GCM ? 16 : 0);
-  const needed = payloadBytes + overhead + 10; // + SBV2 header
-  const overCapacity = capacity != null && needed > capacity;
-  const busy = stage !== null;
+  const needed = payloadBytes + overhead + 10;
   const engineMode = vault.settings.engineMode === 'engine';
+
+  useEffect(() => {
+    if (engineMode) setEncrypt(true);
+  }, [engineMode]);
+
+  // Capacity is deliberately requested before Hide is enabled in engine mode.
+  // That gives operators a real per-medium answer instead of an image-only
+  // pixel estimate, and prevents an avoidable multipart round trip.
+  useEffect(() => {
+    let cancelled = false;
+    if (!engineMode || !loaded) {
+      setEngineCapacityReport(null);
+      setEngineCapacityError(null);
+      setEngineCapacityBusy(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+    setEngineBase(vault.settings.engineUrl);
+    setEngineCapacityBusy(true);
+    setEngineCapacityReport(null);
+    setEngineCapacityError(null);
+    engineCapacity(loaded.file)
+      .then((report) => {
+        if (!cancelled) setEngineCapacityReport(report);
+      })
+      .catch((error) => {
+        if (!cancelled) setEngineCapacityError(error instanceof Error ? error.message : 'Java engine capacity check failed.');
+      })
+      .finally(() => {
+        if (!cancelled) setEngineCapacityBusy(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [engineMode, loaded, vault.settings.engineUrl]);
+
+  const effectiveCapacity = engineMode ? engineCapacityReport?.capacityBytes ?? null : capacity;
+  const overCapacity = engineMode
+    ? engineCapacityReport != null && payloadBytes > engineCapacityReport.capacityBytes
+    : capacity != null && needed > capacity;
+  const busy = stage !== null || engineCapacityBusy;
+  const capacityReady = !engineMode || (!!engineCapacityReport && !engineCapacityBusy);
   const canRun =
-    (!!loaded && (engineMode || !!pixels)) && payloadBytes > 0 && !overCapacity && (!encrypt || password.length > 0) && !busy;
+    (!!loaded && (engineMode || loaded.kind !== 'image' || !!pixels)) &&
+    payloadBytes > 0 &&
+    capacityReady &&
+    !overCapacity &&
+    (engineMode ? password.length > 0 : !encrypt || password.length > 0) &&
+    !busy;
 
   const runEmbed = async () => {
-    if (!loaded || (!pixels && !engineMode)) {
-      setError('Select a lossless cover image (PNG / BMP / TIFF / WebP) first.');
+    if (!loaded) {
+      setError('Choose a supported carrier file first.');
+      return;
+    }
+    if (!engineMode && loaded.kind !== 'image') {
+      setError(localEngineRequired(loaded.kind, 'embedding'));
+      return;
+    }
+    if (!pixels && !engineMode) {
+      setError('The image could not be decoded in this browser. Try a smaller, valid image or switch to Java engine mode.');
       return;
     }
     if (!payloadBytes) {
       setError('The Secret Payload box is empty.');
       return;
     }
-    if (encrypt && !password) {
+    if (engineMode && !password) {
+      setError('Java engine mode always encrypts with AES-256-GCM — enter a passphrase before embedding.');
+      return;
+    }
+    if (!engineMode && encrypt && !password) {
       setError('Encrypt Payload is armed — a password is required to derive the AES key.');
       return;
     }
+    if (engineMode && !engineCapacityReport) {
+      setError('Wait for the Java engine capacity report before embedding.');
+      return;
+    }
     if (overCapacity) {
-      setError(`Payload (${fmtBytes(needed)}) exceeds this carrier's LSB capacity.`);
+      setError(
+        engineMode
+          ? `Payload (${fmtBytes(payloadBytes)}) exceeds this ${loaded.kind} carrier's engine capacity of ${fmtBytes(engineCapacityReport?.capacityBytes ?? 0)}.`
+          : `Payload (${fmtBytes(needed)}) exceeds this image's LSB capacity.`
+      );
       return;
     }
     setError(null);
     setResult(null);
     try {
       if (engineMode) {
+        setEngineBase(vault.settings.engineUrl);
         setStage('Handing cover + payload to the Java engine (zero-disk, RAM-only)…');
-        const { report, stego } = await engineHide({
+        const { report, stego, fileName } = await engineHide({
           cover: loaded.file,
-          passphrase: password || 'stegobolt-unencrypted',
+          passphrase: password,
           payloadText: payload,
         });
-        const name = report.stegoFileName || loaded.name.replace(/\.[^.]+$/, '') + '.stego.png';
+        const name = report.stegoFileName || fileName || loaded.name.replace(/\.[^.]+$/, '') + '.stego';
         const hash = await sha256Hex(stego);
         setResult({
           blob: stego,
@@ -116,8 +189,9 @@ export function HideTab() {
           mse: null,
           ssim: null,
           bitsUsed: report.capacityUsedBits,
-          capacityBits: null,
+          capacityBits: engineCapacityReport?.capacityBits ?? null,
           viaEngine: true,
+          medium: report.medium,
         });
         vault.setArtifacts({
           coverName: loaded.name,
@@ -162,7 +236,7 @@ export function HideTab() {
         return;
       }
       if (!pixels) {
-        setError('Select a lossless cover image (PNG / BMP / TIFF / WebP) first.');
+        setError('The image could not be decoded in this browser. Try a smaller, valid image or switch to Java engine mode.');
         return;
       }
       setStage('Sealing payload with ' + (cipher === CIPHER.RAW ? 'raw bitstream' : 'AES-256-' + (cipher === CIPHER.AES_256_CTR ? 'CTR' : 'GCM') + ' (PBKDF2 · 100k iterations)'));
@@ -265,8 +339,8 @@ export function HideTab() {
           <p className="label">Select Cover File</p>
           <FileDropzone
             id="sb-dropzone"
-            accept="image/png,image/bmp,image/webp,image/gif,image/tiff,image/jpeg"
-            hint="PNG / BMP / TIFF / WebP recommended — lossy JPEG recompression destroys the LSB plane"
+            accept={CARRIER_ACCEPT}
+            hint="PNG/BMP/WebP/GIF/TIFF/JPEG · WAV/FLAC · MP4/MKV/AVI · PDF/DOCX · text/code · PCAP/PCAPNG"
             filled={!!loaded}
             onFile={(f) => void load(f)}
           >
@@ -300,16 +374,48 @@ export function HideTab() {
             />
             <div className="mt-1.5 flex items-center justify-between text-[10.5px]">
               <span className="text-slate-600">
-                {loaded?.width && loaded?.height
-                  ? `${fmtBytes(needed)} payload · carrier LSB capacity ${capacity != null ? fmtBytes(capacity) : '…'}`
-                  : `carrier capacity unknown until an image is decoded`}
+                {engineMode
+                  ? `${fmtBytes(payloadBytes)} plaintext · engine capacity ${effectiveCapacity != null ? fmtBytes(effectiveCapacity) : '…'}`
+                  : loaded?.width && loaded?.height
+                  ? `${fmtBytes(needed)} sealed payload · image LSB capacity ${capacity != null ? fmtBytes(capacity) : '…'}`
+                  : 'image capacity appears after a successful local decode'}
               </span>
               <span className={`font-medium ${overCapacity ? 'text-red-400' : payloadBytes === 0 ? 'text-slate-600' : 'text-emerald-400'}`}>
-                {overCapacity ? 'OVER CAPACITY' : `${((needed / Math.max(1, capacity ?? 1)) * 100).toFixed(2)}% of plane used`}
+                {overCapacity
+                  ? 'OVER CAPACITY'
+                  : effectiveCapacity != null
+                  ? `${((payloadBytes / Math.max(1, effectiveCapacity)) * 100).toFixed(2)}% of capacity`
+                  : 'capacity pending'}
                 <InfoTip text={TIPS.LSB} width={290} />
               </span>
             </div>
           </div>
+
+          {engineMode && loaded && (
+            <div className="mt-3 space-y-1.5 rounded-lg border border-sky-500/25 bg-sky-500/5 px-3 py-2.5 text-[10.5px] leading-relaxed">
+              <p className="flex items-center justify-between gap-3 font-semibold text-sky-200">
+                <span>Java engine capacity</span>
+                <span className="font-mono text-sky-100">
+                  {engineCapacityBusy
+                    ? 'checking…'
+                    : engineCapacityReport
+                    ? `${fmtBytes(engineCapacityReport.capacityBytes)} payload · ${engineCapacityReport.medium}`
+                    : 'unavailable'}
+                </span>
+              </p>
+              {engineCapacityReport && (
+                <>
+                  <p className="text-slate-400">{capacityHint(loaded.kind, loaded.name)}</p>
+                  {engineCapacityReport.details && <p className="font-mono text-[10px] text-slate-500">Engine detail: {engineCapacityReport.details}</p>}
+                </>
+              )}
+              {engineCapacityError && <p className="text-amber-300">{engineCapacityError}</p>}
+              {(() => {
+                const warning = vercelBodyLimitWarning(vault.settings.engineUrl, loaded.size);
+                return warning ? <p className="text-amber-300">{warning}</p> : null;
+              })()}
+            </div>
+          )}
 
           {/* Security Configuration */}
           <div id="sb-security" className="mt-4 rounded-xl border border-hair bg-panel2/35 p-4 transition-shadow focus-within:shadow-glow">
@@ -324,9 +430,14 @@ export function HideTab() {
                     <ShieldCheck size={13} className="text-emerald-400" /> Encrypt Payload
                     <InfoTip text={encrypt ? TIPS.AES : 'Payload will be scattered RAW — any LSB extractor can read it. Toggle encryption for confidentiality + tamper evidence.'} width={300} />
                   </span>
-                  <Toggle checked={encrypt} onChange={setEncrypt} label="Encrypt payload" />
+                  <Toggle checked={encrypt} onChange={setEncrypt} disabled={engineMode} label="Encrypt payload" />
                 </div>
-                {!encrypt && (
+                {engineMode && (
+                  <p className="rounded-md border border-sky-500/25 bg-sky-500/10 px-2.5 py-1.5 text-[11px] text-sky-200">
+                    Java engine mode uses AES-256-GCM for every medium. Enter a passphrase; the browser never receives the sealed key.
+                  </p>
+                )}
+                {!encrypt && !engineMode && (
                   <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-300">
                     Warning: unencrypted payloads are trivially recoverable by anyone with an LSB dumper.
                   </p>
@@ -336,7 +447,7 @@ export function HideTab() {
                     <p className="label">Algorithm</p>
                     <select
                       value={algorithm}
-                      disabled={!encrypt}
+                      disabled={!encrypt || engineMode}
                       onChange={(e) => setAlgorithm(Number(e.target.value))}
                       className="select input"
                     >
@@ -465,6 +576,7 @@ export function HideTab() {
                 Stego object ready — {result.name}
               </h3>
               <p className="mt-1 font-mono text-[10.5px] text-slate-500">SHA-256 {result.hash}</p>
+              {result.viaEngine && <p className="mt-1 text-[10.5px] text-sky-300">{result.medium} · Java engine report · {fmtBytes(result.blob.size)} output</p>}
             </div>
             <div className="flex gap-2">
               <button onClick={() => downloadBlob(result.blob, result.name)} className="btn-green !py-2">
@@ -479,8 +591,9 @@ export function HideTab() {
             <Metric label="MSE · carrier" value={`${result.mse == null ? '—' : result.mse.toFixed(4)} · ${typeBadge(result.name, result.viaEngine ? loaded?.type || 'application/octet-stream' : 'image/png')} ${fmtBytes(result.blob.size)}`} />
           </div>
           <p className="mt-3 text-[10.5px] leading-relaxed text-slate-500">
-            Imperceptible modification verified — the SBV2 container lives only in the lowest bit of R/G/B bytes. To recover: switch to
-            Extract (Decode), load this PNG and supply the password.
+            {result.viaEngine
+              ? `The Java engine reported a ${result.name.toLowerCase().endsWith('.png') ? 'lossless PNG' : 'medium-preserving'} stego carrier. To recover it, switch to Extract, load this file and supply the same passphrase.`
+              : 'The SBV2 container lives in the lowest bit of the image colour channels. To recover it, switch to Extract, load this PNG and supply the password.'}
           </p>
         </section>
       )}

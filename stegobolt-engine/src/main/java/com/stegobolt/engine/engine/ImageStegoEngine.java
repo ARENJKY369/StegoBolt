@@ -14,7 +14,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 
 /**
- * Image Steganography (PNG, BMP, WebP) — §4.2.
+ * Image Steganography (PNG, BMP, WebP, GIF, TIFF, JPEG) — §4.2.
  *
  * <p>Secrets are embedded in the least significant bits of the R/G/B pixel color
  * channels via {@link BufferedImage} + {@link javax.imageio.ImageIO}, so the
@@ -170,7 +170,7 @@ public final class ImageStegoEngine implements StegoEngine {
             throw new StegoException("Image could not be decoded", e);
         }
         if (raw == null) {
-            throw new StegoException("Image format not readable by ImageIO (use PNG, BMP, WebP, GIF or TIFF)");
+            throw new StegoException("Image format not readable by ImageIO (use PNG, BMP, WebP, GIF, TIFF or JPEG)");
         }
         // Decompression-bomb guard: crafted headers can declare absurd dimensions.
         if ((long) raw.getWidth() * raw.getHeight() > 64_000_000L) {

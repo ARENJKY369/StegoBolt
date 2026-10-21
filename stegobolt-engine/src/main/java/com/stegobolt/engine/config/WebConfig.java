@@ -13,16 +13,22 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 @Configuration
 public class WebConfig implements WebMvcConfigurer {
 
-    /** The Next.js UI delegates to http://localhost:8080/api/v1/stego. */
-    private static final String[] ALLOWED_ORIGINS = {
-            "http://localhost:3000",
-            "http://127.0.0.1:3000"
+    /**
+     * Local development plus the hosted preview/deployment origins supported by
+     * the UI. CORS is not authentication; the engine still has no credentials
+     * or persistent state to disclose.
+     */
+    private static final String[] ALLOWED_ORIGIN_PATTERNS = {
+            "http://localhost:[*]",
+            "http://127.0.0.1:[*]",
+            "https://*.vercel.app",
+            "https://*.e2b.app"
     };
 
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/api/**")
-                .allowedOrigins(ALLOWED_ORIGINS)
+                .allowedOriginPatterns(ALLOWED_ORIGIN_PATTERNS)
                 .allowedMethods("POST", "OPTIONS")
                 .allowedHeaders("*")
                 .exposedHeaders("X-StegoBolt-Report", "Content-Disposition")

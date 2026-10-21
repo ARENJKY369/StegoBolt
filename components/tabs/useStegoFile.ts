@@ -3,6 +3,7 @@
 import { useCallback, useRef, useState } from 'react';
 import { sha256Hex } from '@/lib/crypto';
 import { decodeImageData, probeFile, type DecodedPixels } from '@/lib/image';
+import { isSupportedCarrier, type CarrierKind } from '@/lib/mediums';
 
 export interface LoadedFile {
   file: File;
@@ -11,7 +12,7 @@ export interface LoadedFile {
   type: string;
   previewUrl: string | null;
   hash: string;
-  kind: 'image' | 'audio' | 'pdf' | 'text' | 'other';
+  kind: CarrierKind;
   width?: number;
   height?: number;
   bytes?: ArrayBuffer;
@@ -47,6 +48,10 @@ export function useStegoFile(opts: { decode?: boolean } = {}) {
       try {
         if (file.size > MAX_LOAD_BYTES) {
           setError('File exceeds the 512 MB in-browser processing ceiling. Trim the carrier first — everything is held in RAM.');
+          return false;
+        }
+        if (!isSupportedCarrier(file.name, file.type)) {
+          setError('Unsupported carrier. Choose PNG/BMP/WebP/GIF/TIFF/JPEG, WAV/FLAC, MP4/MKV/AVI, PDF/DOCX, text/code, or PCAP/PCAPNG.');
           return false;
         }
         if (urlRef.current) URL.revokeObjectURL(urlRef.current);

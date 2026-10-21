@@ -1,7 +1,7 @@
 # ⚡ StegoBolt v2.0 — Zero-Knowledge Steganography Suite
 
-Production-grade steganography & media sanitization web app that runs **100% in the browser**.
-No backend. No accounts. No telemetry. Your cover files, payloads and keys never leave the device.
+Production-grade, local-first steganography & media sanitization web app.
+Image work runs **100% in the browser**; the optional Java 17 engine handles all six carrier families when explicitly enabled. No accounts. No telemetry. Local-mode cover files, payloads and keys never leave the device.
 
 Built with **Next.js (App Router) · TypeScript · Tailwind CSS · Lucide Icons · Web Crypto API · Canvas API · Web Workers · IndexedDB (Dexie) · WebAuthn · File System Access API** — plus the optional **StegoBolt Engine**, a 100% Java 17 / Spring Boot 3.x in-memory backend (`stegobolt-engine/`).
 
@@ -26,10 +26,10 @@ CI (`.github/workflows/ci.yml`) runs the TypeScript typecheck, the parity suite 
 | --- | --- |
 | **Local Vault Lock Screen** (`/login`) | First-time master passphrase (min 8, PBKDF2-SHA256 @ 100k) + optional biometric (Touch ID / Windows Hello via WebAuthn) with device-bound key wrap. Every assertion's ES256/RS256 signature is verified against the enrolled COSE public key (clientData type/challenge/origin bound — fails closed). `STEGOBOLT VAULT LOCKED` card, biometric primary unlock, passphrase fallback, `.stegvault` import link. |
 | **Auto-lock lifecycle** | Tab-hidden → instant lock & RAM key flush; 5-minute inactivity timer (user-tunable); buffers zeroized and tabs remounted on every lock cycle. |
-| **Hide (Encode)** | Drag-drop cover (PNG/BMP/WebP/TIFF/GIF), SHA-256 fingerprint row, AES-256-GCM/CTR toggle + password, capacity meter, LSB scatter in an inline Web Worker, lossless PNG output, PSNR/SSIM report, IndexedDB + optional PC folder backup. Optionally delegates to the Java engine (Settings → Java Engine). |
-| **Extract (Decode)** | SBV2 container sweep + GCM tag authentication (wrong pass / tampered pixels fail closed), recovered-text console, copy / save `.txt`. Optionally delegates to the Java engine (Settings → Java Engine). |
-| **Forensic Scan** | Chi-square pair attack, LSB balance, windowed entropy, run analysis, SBV2 signature hunt → Threat Assessment Score (gauge), value-pair histogram & LSB-plane heatmap canvases. |
-| **Sanitize & Clean** | EXIF/XMP tag enumeration (JPEG APP1 TIFF parser incl. GPS), canvas re-encode metadata strip, CSPRNG LSB noise-floor re-randomization, PSNR/changed-bits diff report. |
+| **Hide (Encode)** | One dropzone accepts PNG/BMP/WebP/GIF/TIFF/JPEG, WAV/FLAC, MP4/MKV/AVI, PDF/DOCX, text/code and PCAP/PCAPNG. Images stay local with the Web Worker pipeline; the Java engine supplies capacity preflight and Hide for every medium. |
+| **Extract (Decode)** | Local SBV2/GCM recovery for images; Java engine extraction for every supported medium, with the JSON recovery report surfaced in the console. |
+| **Forensic Scan** | Local image chi-square/entropy/signature analysis, or the Java engine’s medium-aware scan report for all six carrier families. |
+| **Sanitize & Clean** | Local image metadata/LSB cleaning, or Java engine `/clean` for audio, video, documents, text/code and network captures; binary output plus the engine report is shown before download. |
 | **Onboarding tour** | 5-step spotlight tour (`components/onboarding/TourGuide.tsx`) auto-launched on first login: Mode Switcher → Dropzone/SHA-256 → Security & Encryption → Local Vault/PC Backup → Hex Inspector. Skippable, replayable from Settings. |
 | **Hover tooltips** | `<Tooltip>`/`(?)` badge system on every technical term: LSB, PSNR, AES-256-GCM, EXIF, PBKDF2, IndexedDB, FSA, chi-square, SSIM, threat score. |
 | **Docs & legal** | **About** modal (two-tier: plain-language *At a Glance* — what it is, how it protects you, supported mediums grid — with *Under the Hood* technical specs in a collapsible auditor accordion) · **User Manual & Technical Glossary** (searchable; How-To Guides + glossary table) · **Privacy Policy & Terms of Service** (first-run notice with *Acknowledge & Close*). |
@@ -44,9 +44,9 @@ CI (`.github/workflows/ci.yml`) runs the TypeScript typecheck, the parity suite 
 - `lib/exif.ts` — minimal TIFF/IFD0 + GPS sub-IFD reader for metadata previews.
 - `lib/vault.ts` — Dexie IndexedDB journal, `.stegvault` manifest, demo history seeding.
 - `lib/session.tsx` — the RAM-only key holder, auto-lock lifecycle, settings, artifacts and system log.
-- `lib/engineApi.ts` — typed client for the optional Java engine at `http://localhost:8080/api/v1/stego`; wired into Settings → Java Engine (Hide/Extract delegate when enabled).
+- `lib/engineApi.ts` — typed client for the optional Java engine at `http://localhost:8080/api/v1/stego`; wired into Settings → Java Engine (capacity, Hide, Extract, Scan and Clean delegate when enabled).
 
-Zero network calls are made with user data: the app contains no `fetch`/XHR targets, no external fonts, no analytics.
+Local mode makes no network calls with user data. Selecting Java engine mode explicitly sends the carrier to the configured Java service; the Java side is RAM-only and does not persist uploads, outputs or recovered payloads.
 
 ## StegoBolt Engine (Java 17 / Spring Boot 3.x)
 

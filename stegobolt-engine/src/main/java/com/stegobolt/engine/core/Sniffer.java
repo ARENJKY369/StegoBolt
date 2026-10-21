@@ -32,6 +32,9 @@ public final class Sniffer {
                 || startsWith(data, (byte) 'M', (byte) 'M', (byte) 0x00, (byte) 0x2A)) {
             return Medium.IMAGE;
         }
+        if (startsWith(data, (byte) 0xFF, (byte) 0xD8, (byte) 0xFF)) {
+            return Medium.IMAGE;
+        }
         if (startsWith(data, (byte) 'R', (byte) 'I', (byte) 'F', (byte) 'F') && asciiAt(data, 8, 4).equals("WEBP")) {
             return Medium.IMAGE;
         }
