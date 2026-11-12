@@ -93,15 +93,13 @@ export function analyzeLsbPlane(data: Uint8Array, width: number, height: number)
     dfReal += 1;
   }
   const pValue = chiSquareTail(chiSq, Math.max(1, dfReal));
-  // Embedding EQUALIZES value pairs, so the equalization floor χ²≈df (mean df,
-  // sd √(2df)) is the embedding end of the scale and natural covers sit far
-  // ABOVE it. The z-score above the floor maps cleanly to 0..1 evidence:
-  // ~1 on equalized planes, ~0 on ordinary covers — never the other way
-  // round. Sample-size and bucket gates keep noisy small images from scoring.
+  // Under clean sampling, this statistic is centered near dfReal. Embedding
+  // equalizes value pairs and drives it below that baseline, so only a
+  // statistically low result is evidence of embedding.
   const sizeGate = Math.max(0, Math.min(1, Math.sqrt(embeddable / 65536)));
   const dfGate = Math.max(0, Math.min(1, (dfReal - 8) / 24));
   const equalizationZ = (chiSq - dfReal) / Math.sqrt(2 * Math.max(1, dfReal));
-  const chiSquare = Math.max(0, Math.min(1, 1 - (equalizationZ - 1) / 4)) * sizeGate * dfGate;
+  const chiSquare = Math.max(0, Math.min(1, (-equalizationZ - 1) / 4)) * sizeGate * dfGate;
   // Embedding rate via a scan-prefix equalization profile: StegoBolt writes
   // sequentially, so the embedded prefix sits at the equalization floor while
   // the untouched remainder stays natural. The estimate is the largest prefix

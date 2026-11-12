@@ -138,6 +138,19 @@ public final class Packet {
         return len >= 0 && len <= MAX_CIPHERTEXT && raw.length - offset >= (long) HEADER + len;
     }
 
+    /** True when a complete, encrypted SBV2-J packet belongs to {@code medium}. */
+    public static boolean isValidForMedium(byte[] raw, Medium medium) {
+        if (medium == null || !looksLike(raw) || raw.length < HEADER + GCM_TAG_LEN) {
+            return false;
+        }
+        int ciphertextLength = BitIO.getInt(raw, 8);
+        return raw[5] == medium.id()
+                && raw[6] == FLAG_ENCRYPTED
+                && raw[7] == 0
+                && ciphertextLength >= GCM_TAG_LEN
+                && raw.length == HEADER + ciphertextLength;
+    }
+
     /** Parse a container at {@code offset}; throws {@link StegoException} when malformed. */
     public static Packet parse(byte[] raw, int offset) {
         if (!looksLike(raw, offset)) {

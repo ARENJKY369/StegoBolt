@@ -207,12 +207,14 @@ public final class StegoService {
         try {
             Medium medium = Sniffer.sniff(cover, coverName);
             StegoEngine engine = engineFor(medium, textMode);
-            samples = sampleStream(medium, cover);
+            boolean statisticalSamples = medium == Medium.IMAGE
+                    || (medium == Medium.AUDIO && !AudioStegoEngine.isFlac(cover));
+            samples = statisticalSamples ? sampleStream(medium, cover) : new byte[0];
             SteganalysisEngine.Stats stats = SteganalysisEngine.analyze(samples);
 
             embedded = engine.extract(cover);
-            boolean signature = embedded != null;
-            int threat = SteganalysisEngine.threatScore(stats, signature, embedded == null ? 0 : embedded.length);
+            boolean signature = Packet.isValidForMedium(embedded, medium);
+            int threat = SteganalysisEngine.threatScore(stats, signature, signature ? embedded.length : 0);
 
             List<String> indicators = new ArrayList<>();
             if (SteganalysisEngine.chiEqualization(stats) >= 0.6) {

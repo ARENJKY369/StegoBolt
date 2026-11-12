@@ -84,4 +84,23 @@ class SteganalysisEngineTest {
         assertTrue(clean >= 0 && clean <= 100);
         assertTrue(flagged > clean, "signature detection must push the threat score up");
     }
+
+    @Test
+    void cleanNoiseDoesNotLookLikeEqualizedEmbedding() {
+        SteganalysisEngine.Stats stats = SteganalysisEngine.analyze(SecureTestData.deterministicNoise(65536));
+        assertTrue(stats.chiSquareProbability() < 0.995,
+                "ordinary noise should not have a significant equalization probability");
+        assertTrue(SteganalysisEngine.chiEqualization(stats) < 0.1,
+                "clean noise must not produce equalization evidence");
+        assertTrue(SteganalysisEngine.threatScore(stats, false) < 25,
+                "clean noise must remain LOW threat");
+    }
+
+    @Test
+    void lowColorSamplesDoNotProducePairEvidence() {
+        byte[] flat = new byte[8192];
+        java.util.Arrays.fill(flat, (byte) 128);
+        SteganalysisEngine.Stats stats = SteganalysisEngine.analyze(flat);
+        assertEquals(0, SteganalysisEngine.chiEqualization(stats));
+    }
 }

@@ -212,7 +212,25 @@ async function main() {
   const sClean = analyzeLsbPlane(px, W, H);
   assert.ok(!detectSbv2Magic(px), 'clean image must not carry the magic');
   const vClean = threatAssessment(sClean, false);
-  assert.ok(vClean.score < 60, `clean-image threat should not be critical, got ${vClean.score}`);
+  assert.equal(vClean.level, 'LOW', `clean image should be assessed as LOW, got ${vClean.score}`);
+
+  // A clean noise-like image has the expected chi-square statistic near its
+  // degrees of freedom; it must not be mistaken for equalized embedded pairs.
+  let noiseSeed = 0x12345678;
+  const noise = new Uint8Array(W * H * 4);
+  for (let i = 0; i < noise.length; i += 4) {
+    for (let c = 0; c < 3; c++) {
+      noiseSeed ^= noiseSeed << 13;
+      noiseSeed ^= noiseSeed >>> 17;
+      noiseSeed ^= noiseSeed << 5;
+      noise[i + c] = noiseSeed & 0xff;
+    }
+    noise[i + 3] = 255;
+  }
+  const noiseStats = analyzeLsbPlane(noise, W, H);
+  const noiseVerdict = threatAssessment(noiseStats, false);
+  assert.equal(noiseStats.chiSquare, 0, 'clean noise must not produce equalization evidence');
+  assert.equal(noiseVerdict.level, 'LOW', `clean noise must be assessed as LOW, got ${noiseVerdict.score}`);
   const q = measureQuality(px, carrier, 1056, W * H * 3);
   assert.ok(q.psnrDb > 45 && q.ssimApprox > 0.999, `embedding must stay imperceptible (PSNR ${q.psnrDb}, SSIM ${q.ssimApprox})`);
   const plane = renderLsbPlane(carrier, W, H);

@@ -34,27 +34,31 @@ public final class SteganalysisEngine {
             double lsbEntropy,
             double windowedEntropy,
             long samples,
+            int valuePairDegrees,
             double embeddingRate) {
     }
 
     /** Run all detectors over {@code samples} (one embeddable unit per byte). */
     public static Stats analyze(byte[] samples) {
         if (samples == null || samples.length < 16) {
-            return new Stats(0, 0, 0, 0.5, 1, 1, samples == null ? 0 : samples.length, 0);
+            return new Stats(0, 0, 0, 0.5, 1, 4, samples == null ? 0 : samples.length, 0, 0);
         }
         double chiStatistic = chiSquareStatistic(samples);
+        int degrees = pairDegreesOfFreedom(samples);
         // Embedding extent: whichever is stronger of the SPA rate estimate and
         // the value-pair equalization evidence. Both stay ~0 on natural and
         // compressed carriers and grow monotonically with the embedded fraction.
-        double extent = Math.max(spaEmbeddingRatio(samples), equalizationEvidence(chiStatistic, samples.length));
+        double extent = Math.max(spaEmbeddingRatio(samples),
+                equalizationEvidence(chiStatistic, samples.length, degrees));
         return new Stats(
                 chiStatistic,
-                chiSquareProbability(samples),
+                chiSquareProbability(chiStatistic, degrees),
                 spaEmbeddingRatio(samples),
                 lsbOnesRatio(samples),
                 lsbBinaryEntropy(samples),
                 windowedShannonEntropy(samples),
                 samples.length,
+                degrees,
                 extent);
     }
 
@@ -69,7 +73,11 @@ public final class SteganalysisEngine {
         for (int i = 0; i < 128; i++) {
             double n0 = freq[2 * i];
             double n1 = freq[2 * i + 1];
-            double expected = (n0 + n1) / 2.0;
+            double total = n0 + n1;
+            if (total < 20) {
+                continue;
+            }
+            double expected = total / 2.0;
             if (expected > 0) {
                 double d = n0 - expected;
                 chi += d * d / expected;
@@ -78,15 +86,18 @@ public final class SteganalysisEngine {
         return chi;
     }
 
-    /**
-     * Survival function of the chi-square distribution with 127 degrees of
-     * freedom — the probability that a clean cover produces a statistic this
-     * large. Values near 1.0 mean the value pairs are suspiciously equalized
-     * (sequential LSB embedding), values near 0.5 look natural.
-     */
+    /** Survival probability under the clean-cover value-pair distribution. */
     public static double chiSquareProbability(byte[] samples) {
-        double chi = chiSquareStatistic(samples);
-        return 1.0 - regularizedGammaP(127.0 / 2.0, chi / 2.0);
+        int degrees = pairDegreesOfFreedom(samples);
+        if (degrees == 0) {
+            return 0.5;
+        }
+        return chiSquareProbability(chiSquareStatistic(samples), degrees);
+    }
+
+    private static double chiSquareProbability(double statistic, int degrees) {
+        // This statistic is half the conventional Pearson statistic.
+        return 1.0 - regularizedGammaP(degrees / 2.0, statistic);
     }
 
     /** Regularized lower incomplete gamma P(a, x) — series + continued fraction. */
@@ -251,25 +262,36 @@ public final class SteganalysisEngine {
     }
 
     /**
-     * Pair-equalization evidence 0..1 for a raw chi-square statistic over
-     * {@code samples} sample units. Embedding EQUALIZES value pairs, so the
-     * equalization floor χ²≈df/2 (this engine's collapsed statistic sums one
-     * cell per pair, i.e. half the Pearson sum) is the embedding end of the
-     * scale and natural covers sit far ABOVE it. Sample-size gating keeps tiny
-     * or degenerate carriers from producing phantom evidence.
+     * Pair-equalization evidence 0..1. Clean samples have a statistic near
+     * half the active-pair degrees of freedom; only a significant lower-tail
+     * result supports embedding.
      */
-    static double equalizationEvidence(double chiSquareStatistic, long samples) {
-        if (samples < 4096) {
+    static double equalizationEvidence(double chiSquareStatistic, long samples, int degrees) {
+        if (samples < 4096 || degrees < 8) {
             return 0;
         }
-        double df = 127.0;
-        double z = (chiSquareStatistic - df / 2.0) / Math.sqrt(df / 2.0);
-        return clamp01(1.0 - (z - 1.0) / 4.0) * clamp01(Math.sqrt(samples / 65536.0));
+        double z = (chiSquareStatistic - degrees / 2.0) / Math.sqrt(degrees / 2.0);
+        double significance = clamp01((-z - 2.0) / 3.0);
+        return significance * clamp01(Math.sqrt(samples / 65536.0));
     }
 
     /** Pair-equalization evidence 0..1 for a completed stats snapshot. */
     public static double chiEqualization(Stats stats) {
-        return equalizationEvidence(stats.chiSquareStatistic(), stats.samples());
+        return equalizationEvidence(stats.chiSquareStatistic(), stats.samples(), stats.valuePairDegrees());
+    }
+
+    private static int pairDegreesOfFreedom(byte[] samples) {
+        if (samples == null) {
+            return 0;
+        }
+        long[] freq = histogram(samples);
+        int degrees = 0;
+        for (int i = 0; i < 128; i++) {
+            if (freq[2 * i] + freq[2 * i + 1] >= 20) {
+                degrees++;
+            }
+        }
+        return degrees;
     }
 
     /**

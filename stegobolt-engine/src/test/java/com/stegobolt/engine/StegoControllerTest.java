@@ -80,7 +80,33 @@ class StegoControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.medium").value("Image"))
                 .andExpect(jsonPath("$.threatScore").isNumber())
+                .andExpect(jsonPath("$.threatScore").value(org.hamcrest.Matchers.lessThan(25)))
+                .andExpect(jsonPath("$.containerSignatureFound").value(false))
                 .andExpect(jsonPath("$.indicators").isArray());
+    }
+
+    @Test
+    void scanDistinguishesCleanAndEmbeddedText() throws Exception {
+        byte[] cleanText = "ordinary visible text".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        MockMultipartFile clean = new MockMultipartFile("cover", "clean.txt", "text/plain", cleanText);
+        mvc.perform(multipart("/api/v1/stego/scan")
+                        .file(new MockMultipartFile("cover", "clean.txt", "text/plain", cleanText)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.containerSignatureFound").value(false))
+                .andExpect(jsonPath("$.threatScore").value(0));
+
+        MvcResult hidden = mvc.perform(multipart("/api/v1/stego/hide")
+                        .file(clean)
+                        .param("payloadText", "hidden text")
+                        .param("passphrase", "unit-test-pass"))
+                .andExpect(status().isOk())
+                .andReturn();
+        MockMultipartFile stego = new MockMultipartFile(
+                "cover", "stego.txt", "text/plain", hidden.getResponse().getContentAsByteArray());
+        mvc.perform(multipart("/api/v1/stego/scan").file(stego))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.containerSignatureFound").value(true))
+                .andExpect(jsonPath("$.threatScore").value(org.hamcrest.Matchers.greaterThanOrEqualTo(42)));
     }
 
     @Test
