@@ -183,7 +183,7 @@ public final class AudioStegoEngine implements StegoEngine {
     /* FLAC — hidden PADDING metadata block                                */
     /* ------------------------------------------------------------------ */
 
-    public static boolean isFlac(byte[] cover) {
+    private static boolean isFlac(byte[] cover) {
         return cover.length > FLAC_HEADER
                 && cover[0] == 'f' && cover[1] == 'L' && cover[2] == 'a' && cover[3] == 'C';
     }
