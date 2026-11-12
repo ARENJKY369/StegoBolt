@@ -212,16 +212,16 @@ public final class StegoService {
 
             embedded = engine.extract(cover);
             boolean signature = embedded != null;
-            int threat = SteganalysisEngine.threatScore(stats, signature);
+            int threat = SteganalysisEngine.threatScore(stats, signature, embedded == null ? 0 : embedded.length);
 
             List<String> indicators = new ArrayList<>();
-            if (stats.chiSquareProbability() > 0.95) {
+            if (SteganalysisEngine.chiEqualization(stats) >= 0.6) {
                 indicators.add("Value pairs strongly equalized — chi-square embedding probability "
                         + String.format("%.2f", stats.chiSquareProbability()));
             }
-            if (stats.spaEmbeddingRatio() > 0.25) {
-                indicators.add("Sample-pair analysis estimates an embedding ratio of "
-                        + String.format("%.2f", stats.spaEmbeddingRatio()));
+            if (stats.embeddingRate() > 0.36) {
+                indicators.add("Embedding-rate analysis estimates an overwritten fraction of "
+                        + String.format("%.2f", stats.embeddingRate()));
             }
             if (Math.abs(0.5 - stats.lsbOnesRatio()) > 0.1) {
                 indicators.add("LSB plane imbalance — ones ratio "

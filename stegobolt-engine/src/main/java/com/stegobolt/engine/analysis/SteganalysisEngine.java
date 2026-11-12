@@ -32,21 +32,30 @@ public final class SteganalysisEngine {
             double spaEmbeddingRatio,
             double lsbOnesRatio,
             double lsbEntropy,
-            double windowedEntropy) {
+            double windowedEntropy,
+            long samples,
+            double embeddingRate) {
     }
 
     /** Run all detectors over {@code samples} (one embeddable unit per byte). */
     public static Stats analyze(byte[] samples) {
         if (samples == null || samples.length < 16) {
-            return new Stats(0, 0, 0, 0.5, 1, 1);
+            return new Stats(0, 0, 0, 0.5, 1, 1, samples == null ? 0 : samples.length, 0);
         }
+        double chiStatistic = chiSquareStatistic(samples);
+        // Embedding extent: whichever is stronger of the SPA rate estimate and
+        // the value-pair equalization evidence. Both stay ~0 on natural and
+        // compressed carriers and grow monotonically with the embedded fraction.
+        double extent = Math.max(spaEmbeddingRatio(samples), equalizationEvidence(chiStatistic, samples.length));
         return new Stats(
-                chiSquareStatistic(samples),
+                chiStatistic,
                 chiSquareProbability(samples),
                 spaEmbeddingRatio(samples),
                 lsbOnesRatio(samples),
                 lsbBinaryEntropy(samples),
-                windowedShannonEntropy(samples));
+                windowedShannonEntropy(samples),
+                samples.length,
+                extent);
     }
 
     /* ------------------------------------------------------------------ */
@@ -242,18 +251,77 @@ public final class SteganalysisEngine {
     }
 
     /**
-     * Threat Assessment Score (0-100): blended evidence from the value-pair
-     * attack, SPA ratio, LSB balance drift and container-signature detection.
+     * Pair-equalization evidence 0..1 for a raw chi-square statistic over
+     * {@code samples} sample units. Embedding EQUALIZES value pairs, so the
+     * equalization floor χ²≈df/2 (this engine's collapsed statistic sums one
+     * cell per pair, i.e. half the Pearson sum) is the embedding end of the
+     * scale and natural covers sit far ABOVE it. Sample-size gating keeps tiny
+     * or degenerate carriers from producing phantom evidence.
      */
+    static double equalizationEvidence(double chiSquareStatistic, long samples) {
+        if (samples < 4096) {
+            return 0;
+        }
+        double df = 127.0;
+        double z = (chiSquareStatistic - df / 2.0) / Math.sqrt(df / 2.0);
+        return clamp01(1.0 - (z - 1.0) / 4.0) * clamp01(Math.sqrt(samples / 65536.0));
+    }
+
+    /** Pair-equalization evidence 0..1 for a completed stats snapshot. */
+    public static double chiEqualization(Stats stats) {
+        return equalizationEvidence(stats.chiSquareStatistic(), stats.samples());
+    }
+
+    /**
+     * Threat Assessment Score (0-100). A confirmed SBV2-J container signature
+     * proves the carrier was written by the Hide pipeline, so severity scales
+     * directly with the estimated embedded fraction — a short note reads mild,
+     * a near-full carrier climbs to HIGH/CRITICAL. Without a signature the
+     * statistical core stays cautionary (two independent detector families
+     * must corroborate each other), so clean media — even compressed video,
+     * structured text or tiny files — can never read as HIGH.
+     */
+    /** Threat score without recovered-payload context (headerless callers). */
     public static int threatScore(Stats stats, boolean signatureFound) {
-        double score = 0;
-        score += stats.chiSquareProbability() * 35;      // equalized pairs
-        score += stats.spaEmbeddingRatio() * 30;          // pair-category drift
-        score += Math.min(1.0, Math.abs(0.5 - stats.lsbOnesRatio()) * 4) * 10;
-        score += (1.0 - Math.min(1.0, stats.windowedEntropy() / 4.0)) * 5;
+        return threatScore(stats, signatureFound, 0);
+    }
+
+    /**
+     * Threat Assessment Score (0-100). A confirmed SBV2-J container signature
+     * proves the carrier was written by the Hide pipeline, so severity scales
+     * directly with the embedding extent — a short note reads mild, a
+     * near-full carrier climbs to HIGH/CRITICAL. When the payload was
+     * recovered ({@code recoveredPayloadBytes} &gt; 0) its size is an exact,
+     * texture-independent extent measurement. Without a signature the
+     * statistical core stays cautionary (two independent detector families
+     * must corroborate each other), so clean media — even compressed video,
+     * structured text or tiny files — can never read as HIGH.
+     */
+    public static int threatScore(Stats stats, boolean signatureFound, long recoveredPayloadBytes) {
+        double eq = chiEqualization(stats);
+        // Embedding-extent ramp: silent below 0.2, saturated at 0.75 — grows
+        // monotonically with the embedded fraction of the carrier.
+        double sizeEvidence = clamp01((stats.embeddingRate() - 0.2) / 0.55);
+        double declaredRamp = 0;
+        if (signatureFound && recoveredPayloadBytes > 0 && stats.samples() >= 8) {
+            double fraction = clamp01((recoveredPayloadBytes * 8.0) / stats.samples());
+            declaredRamp = clamp01((fraction - 0.02) / 0.4);
+        }
+        double extent = Math.max(sizeEvidence, declaredRamp);
+        double supports = Math.min(1.0, Math.abs(0.5 - stats.lsbOnesRatio()) * 4) * 6
+                + (1.0 - Math.min(1.0, stats.windowedEntropy() / 4.0)) * 4;
+        double score;
         if (signatureFound) {
-            score += 40;                                  // SBV2-J signature hunt hit
+            score = 42 + 30 * extent + 16 * eq + supports;
+        } else {
+            double eqAgreement = eq * (0.15 + 0.85 * sizeEvidence);
+            double extentAgreement = sizeEvidence * (0.15 + 0.85 * eq);
+            score = (35 * eqAgreement + 25 * extentAgreement + supports) * 0.55;
         }
         return (int) Math.round(Math.min(100, Math.max(0, score)));
+    }
+
+    private static double clamp01(double value) {
+        return Math.max(0.0, Math.min(1.0, value));
     }
 }

@@ -17,7 +17,14 @@ export interface DecodedPixels {
 export async function decodeImageData(blob: Blob): Promise<DecodedPixels> {
   let bitmap: ImageBitmap;
   try {
-    bitmap = await createImageBitmap(blob);
+    // Stego carriers are byte-exact media: forbid color-profile conversion and
+    // alpha premultiplication so the decoded LSB plane is bit-identical to the
+    // file. Some canvas paths otherwise round pixel values by ±1, which
+    // destroys LSB-embedded headers (upper bits preserved, low bits perturbed).
+    bitmap = await createImageBitmap(blob, {
+      premultiplyAlpha: 'none',
+      colorSpaceConversion: 'none',
+    } as ImageBitmapOptions);
   } catch {
     // Safari <15 fallback via HTMLImageElement
     bitmap = await new Promise<ImageBitmap>((resolve, reject) => {
@@ -52,7 +59,12 @@ export async function decodeImageData(blob: Blob): Promise<DecodedPixels> {
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const ctx = canvas.getContext('2d', {
+    willReadFrequently: true,
+    // Locked to sRGB so draws are deterministic; defaults are display-profile
+    // dependent and can round sampled bytes off by one.
+    colorSpace: 'srgb',
+  } as CanvasRenderingContext2DSettings);
   if (!ctx) throw new Error('CANVAS_UNAVAILABLE');
   ctx.drawImage(bitmap, 0, 0);
   bitmap.close?.();
